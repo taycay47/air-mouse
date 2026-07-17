@@ -1,0 +1,14 @@
+.DS_Store
+.venv/
+
+# TLS cert/key are generated locally on first run — never commit private key material
+cert.pem
+key.pem
+
+# Node / Raycast extension
+air-mouse/node_modules/
+air-mouse/.raycast-swift-build/
+air-mouse/.swiftpm/
+air-mouse/compiled_raycast_swift/
+air-mouse/compiled_raycast_rust/
+air-mouse/raycast-env.d.ts

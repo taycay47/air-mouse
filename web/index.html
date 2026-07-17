@@ -1,0 +1,1666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="description" content="Sleek glassmorphic mobile trackpad and air mouse controller for macOS.">
+    <title>Mac Remote Controller</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #030305;
+            --panel-bg: rgba(18, 18, 24, 0.4);
+            --border-color: rgba(255, 255, 255, 0.05);
+            --primary-gradient: linear-gradient(135deg, #9b51e0, #00f2fe);
+            --accent-purple: #9b51e0;
+            --accent-cyan: #00f2fe;
+            --text-color: #f5f7fa;
+            --text-muted: rgba(245, 247, 250, 0.45);
+            --active-glow: 0 0 15px rgba(0, 242, 254, 0.35);
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1.2px, transparent 1.2px);
+            background-size: 24px 24px;
+            color: var(--text-color);
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #touch-surface {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1;
+            /* Subtle dot grid — lowered opacity */
+            background-image: radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+
+        /* Right-edge scroll scale indicator — flush to screen edge, horizontal ticks */
+        #touch-surface::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;           /* touching the screen edge */
+            width: 14px;        /* how far ticks extend inward */
+            bottom: 0;
+            /* Horizontal tick marks, perpendicular to the right edge */
+            background: repeating-linear-gradient(
+                to bottom,
+                rgba(255,255,255,0.09) 0px,
+                rgba(255,255,255,0.09) 1px,
+                transparent 1px,
+                transparent 24px  /* matches 24px dot-grid spacing */
+            );
+            pointer-events: none;
+        }
+
+        .trackpad-active-indicator {
+            display: none !important;
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 2px solid var(--accent-cyan);
+            background: rgba(0, 255, 255, 0.15);
+            pointer-events: none;
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0.5);
+            transition: opacity 0.1s ease, transform 0.2s ease;
+            z-index: 2;
+        }
+
+        /* Redesigned Floating Control Pill */
+        .hud-control-pill {
+            position: absolute;
+            top: calc(env(safe-area-inset-top, 0px) + 24px);
+            left: calc(env(safe-area-inset-left, 0px) + 24px);
+            display: flex;
+            align-items: center;
+            background: rgba(18, 18, 24, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            padding: 4px 10px 4px 12px;
+            gap: 12px;
+            z-index: 10;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            pointer-events: auto;
+            max-width: 90vw;
+            white-space: nowrap;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #ff3b30;
+            box-shadow: 0 0 8px #ff3b30;
+            flex-shrink: 0;
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.connected {
+            background-color: #34c759;
+            box-shadow: 0 0 8px #34c759;
+        }
+
+        .mode-toggle {
+            display: flex;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 16px;
+            padding: 2px;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+            position: relative;
+        }
+
+        .toggle-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            padding: 4px 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            border-radius: 14px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .toggle-btn.active {
+            background: rgba(255, 255, 255, 0.12);
+            color: #fff;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+        }
+
+        .hud-divider {
+            width: 1px;
+            height: 16px;
+            background: rgba(255, 255, 255, 0.10);
+            flex-shrink: 0;
+        }
+
+        .hud-actions {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .hud-icon-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: transparent;
+            border: none;
+            color: var(--text-color);
+            font-size: 0.8rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .hud-icon-btn:active {
+            background: rgba(255, 255, 255, 0.12);
+            transform: scale(0.9);
+        }
+
+        /* Settings Drawer Overlay */
+        .settings-drawer {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            z-index: 100;
+        }
+
+        .settings-drawer.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .settings-drawer-content {
+            background: rgba(20, 20, 25, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 24px;
+            width: 85%;
+            max-width: 320px;
+            transform: scale(0.9);
+            transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+        }
+
+        .settings-drawer.active .settings-drawer-content {
+            transform: scale(1);
+        }
+
+        .setting-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .setting-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .setting-slider {
+            width: 100%;
+            accent-color: var(--accent-cyan);
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .action-btn {
+            background: var(--primary-gradient);
+            border: none;
+            color: #fff;
+            padding: 12px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: var(--active-glow);
+            transition: all 0.2s;
+        }
+
+        .action-btn:active {
+            transform: scale(0.96);
+        }
+
+        .action-btn.secondary {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-color);
+            box-shadow: none;
+        }
+
+
+
+        /* Toast Notifications */
+        .toast {
+            position: fixed;
+            bottom: 40px;
+            left: 50%;
+            transform: translate(-50%, 20px);
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid var(--accent-cyan);
+            padding: 8px 18px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            z-index: 200;
+            pointer-events: none;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translate(-50%, 0);
+        }
+
+        /* Visually Hidden Accessibility elements */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* Hidden Keyboard Input — must stay within viewport so iOS Safari triggers the keyboard on focus() */
+        #hidden-input {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            border: none;
+            background: transparent;
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        /* Dedicated Bottom-Right Actions Island (Keyboard & Dictation) */
+        .bottom-actions-island {
+            position: absolute;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 36px);
+            right: calc(env(safe-area-inset-right, 0px) + 24px);
+            z-index: 100; /* Ensure buttons sit on top of gesture surface */
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            pointer-events: auto;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .action-fab {
+            border-radius: 50%;
+            background: rgba(18, 18, 24, 0.75);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            touch-action: none;
+            -webkit-touch-callout: none;
+        }
+
+        .action-fab:active {
+            transform: scale(0.92);
+        }
+
+        /* Keyboard FAB styling */
+        .keyboard-fab {
+            width: 60px;
+            height: 60px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .keyboard-fab.hidden {
+            width: 0 !important;
+            height: 0 !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            transform: scale(0) !important;
+            margin-right: -16px !important;
+            border: none !important;
+            padding: 0 !important;
+        }
+
+        .keyboard-fab svg {
+            width: 26px;
+            height: 26px;
+            transition: transform 0.2s ease;
+        }
+
+        .keyboard-fab:active svg {
+            transform: scale(0.9);
+        }
+
+        /* Zoom toggle FAB styling */
+        .zoom-toggle-fab {
+            width: 60px;
+            height: 60px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+        }
+
+        .zoom-toggle-fab svg {
+            width: 26px;
+            height: 26px;
+            transition: transform 0.2s ease;
+        }
+
+        .zoom-toggle-fab:active svg {
+            transform: scale(0.9);
+        }
+
+        /* Dictate FAB styling */
+        .mic-dictate-btn {
+            width: 76px;
+            height: 76px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+        }
+
+        .mic-dictate-btn svg {
+            width: 32px;
+            height: 32px;
+            transition: all 0.25s ease;
+        }
+
+        /* Ambient subtle cyan/purple border glow in idle mode */
+        .mic-dictate-btn::after {
+            content: '';
+            position: absolute;
+            top: -2px; left: -2px; right: -2px; bottom: -2px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-cyan));
+            z-index: -1;
+            opacity: 0.3;
+            transition: opacity 0.3s ease;
+        }
+
+        /* Pulsing/Ripple effect container during recording */
+        .mic-dictate-btn::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            border-radius: 50%;
+            border: 2px solid #ff3b30;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Active recording state styles */
+        .mic-dictate-btn.recording {
+            background: rgba(255, 59, 48, 0.25);
+            border-color: rgba(255, 59, 48, 0.6);
+            color: #ff453a;
+            box-shadow: 0 0 30px rgba(255, 59, 48, 0.6), inset 0 1px 2px rgba(255, 255, 255, 0.3);
+            animation: mic-pulse 1.2s infinite alternate;
+        }
+
+        .mic-dictate-btn.recording svg {
+            transform: scale(1.1);
+            fill: rgba(255, 59, 48, 0.25);
+            stroke: #ff453a;
+        }
+
+        .mic-dictate-btn.recording::after {
+            opacity: 0; /* Turn off cyan/purple gradient glow during recording */
+        }
+
+        .mic-dictate-btn.recording::before {
+            opacity: 1;
+            animation: mic-ripple 1.2s infinite ease-out;
+        }
+
+        @keyframes mic-pulse {
+            0% {
+                transform: scale(0.95);
+                box-shadow: 0 0 20px rgba(255, 59, 48, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+            }
+            100% {
+                transform: scale(1.05);
+                box-shadow: 0 0 40px rgba(255, 59, 48, 0.8), inset 0 1px 1px rgba(255, 255, 255, 0.4);
+            }
+        }
+
+        @keyframes mic-ripple {
+            0% {
+                transform: scale(1);
+                opacity: 0.8;
+            }
+            100% {
+                transform: scale(1.5);
+                opacity: 0;
+            }
+        }
+
+        /* Processing state styles (waiting for transcription) */
+        .mic-dictate-btn.processing {
+            background: rgba(0, 242, 254, 0.15);
+            border-color: rgba(0, 242, 254, 0.6);
+            color: var(--accent-cyan);
+            box-shadow: 0 0 25px rgba(0, 242, 254, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.2);
+            animation: mic-process-glow 1.5s infinite alternate;
+        }
+
+        .mic-dictate-btn.processing svg {
+            animation: mic-process-spin 1.2s infinite linear;
+        }
+
+        .mic-dictate-btn.processing::after {
+            opacity: 0;
+        }
+
+        .mic-dictate-btn.processing::before {
+            opacity: 1;
+            border-color: var(--accent-cyan);
+            animation: mic-ripple-cyan 1.2s infinite ease-out;
+        }
+
+        @keyframes mic-process-glow {
+            0% {
+                box-shadow: 0 0 15px rgba(0, 242, 254, 0.3);
+            }
+            100% {
+                box-shadow: 0 0 30px rgba(0, 242, 254, 0.7);
+            }
+        }
+
+        @keyframes mic-process-spin {
+            0% {
+                transform: rotate(0deg) scale(0.9);
+            }
+            50% {
+                transform: rotate(180deg) scale(1.05);
+            }
+            100% {
+                transform: rotate(360deg) scale(0.9);
+            }
+        }
+
+        @keyframes mic-ripple-cyan {
+            0% {
+                transform: scale(1);
+                opacity: 0.6;
+            }
+            100% {
+                transform: scale(1.4);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Visually hidden accessibility title -->
+    <h1 class="sr-only">Mac Remote Controller and Air Mouse</h1>
+
+    <!-- Full-screen Touch Surface -->
+    <div id="touch-surface">
+        <div class="trackpad-active-indicator" id="touch-indicator"></div>
+    </div>
+    
+    <!-- Redesigned Control Pill (Top Left) -->
+    <div class="hud-control-pill">
+        <!-- Left: Connection status indicator dot -->
+        <div id="status-dot" class="status-dot"></div>
+        
+        <!-- Center: Sleek Mode Switcher -->
+        <div class="mode-toggle">
+            <button id="tab-trackpad" class="toggle-btn active">Track</button>
+            <button id="tab-airmouse" class="toggle-btn">Air</button>
+        </div>
+        
+        <div class="hud-divider"></div>
+        
+        <!-- Right: Action Buttons (Settings) -->
+        <div class="hud-actions">
+            <!-- Settings button -->
+            <button id="btn-settings-toggle" class="hud-icon-btn" aria-label="Settings" title="Settings">
+                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.6 1z"></path>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Hidden Input for keyboard access -->
+    <input type="text" id="hidden-input" autocomplete="off" autocapitalize="none" spellcheck="false">
+
+    <!-- Hidden iOS Haptic checkbox (iOS 18+ switch trick for haptic feedback) -->
+    <input type="checkbox" id="haptic-switch" switch style="position:absolute;top:-999px;left:-999px;opacity:0;pointer-events:none;" aria-hidden="true">
+
+    <!-- Dedicated Bottom-Right Actions Island (Keyboard & Dictation) -->
+    <div id="bottom-actions-island" class="bottom-actions-island">
+        <!-- Keyboard button -->
+        <button id="btn-keyboard-toggle" class="action-fab keyboard-fab" aria-label="Toggle Keyboard" title="Toggle Keyboard">
+            <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="8" width="20" height="13" rx="2" ry="2"></rect>
+                <line x1="6" y1="12" x2="6.01" y2="12"></line>
+                <line x1="10" y1="12" x2="10.01" y2="12"></line>
+                <line x1="14" y1="12" x2="14.01" y2="12"></line>
+                <line x1="18" y1="12" x2="18.01" y2="12"></line>
+                <line x1="6" y1="16" x2="6.01" y2="16"></line>
+                <line x1="10" y1="16" x2="10.01" y2="16"></line>
+                <line x1="14" y1="16" x2="14.01" y2="16"></line>
+                <line x1="18" y1="16" x2="18.01" y2="16"></line>
+                <line x1="7" y1="19" x2="17" y2="19"></line>
+                <polyline points="9 4 12 1 15 4"></polyline>
+                <line x1="12" y1="1" x2="12" y2="8"></line>
+            </svg>
+        </button>
+
+        <!-- Voice Dictation button (Hold to speak) -->
+        <button id="btn-mic-dictate" class="action-fab mic-dictate-btn" aria-label="Dictate text" title="Dictate text">
+            <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+            </svg>
+        </button>
+
+        <!-- Zoom controls: toggle + in/out (in/out only visible when zoomed) -->
+        <div id="zoom-cluster" style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+            <!-- Zoom in / out — hidden until zoom is active -->
+            <div id="zoom-inout" style="display:none;flex-direction:column;align-items:center;gap:4px;">
+                <button id="btn-zoom-in" class="action-fab" style="width:38px;height:38px;font-size:1.1rem;font-weight:700;" aria-label="Zoom In" title="Zoom In (⌥⌘=)">+</button>
+                <button id="btn-zoom-out" class="action-fab" style="width:38px;height:38px;font-size:1.1rem;font-weight:700;" aria-label="Zoom Out" title="Zoom Out (⌥⌘-)">−</button>
+            </div>
+            <!-- Zoom toggle -->
+            <button id="btn-zoom-toggle" class="action-fab zoom-toggle-fab" aria-label="Toggle Zoom" title="Toggle macOS Zoom (⌥⌘8)">
+                <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    <line x1="11" y1="8" x2="11" y2="14"></line>
+                    <line x1="8" y1="11" x2="14" y2="11"></line>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Floating Settings Panel Drawer -->
+    <div id="settings-drawer" class="settings-drawer">
+        <div class="settings-drawer-content">
+            <h4 style="margin-bottom: 15px; font-size: 0.9rem; font-weight: 600; text-align: center; color: #fff;">Settings</h4>
+            
+            <!-- 3D Phone & Telemetry relocated here -->
+            <div id="settings-telemetry" style="background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px; padding: 12px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-around;">
+                <!-- Tiny 3D Phone Mockup -->
+                <div style="perspective: 300px; width: 60px; height: 60px; display: flex; justify-content: center; align-items: center;">
+                    <div id="phone-3d" style="width: 24px; height: 44px; border-radius: 4px; background: linear-gradient(135deg, rgba(0, 255, 255, 0.4), rgba(138, 43, 226, 0.4)); border: 1px solid rgba(255, 255, 255, 0.3); box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); transform-style: preserve-3d; transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg); transition: transform 0.1s ease; position: relative;">
+                        <!-- Front indicator -->
+                        <div style="position: absolute; top: 2px; left: 2px; right: 2px; bottom: 2px; border-radius: 2px; background: rgba(0, 0, 0, 0.7); display: flex; justify-content: center; align-items: center; color: rgba(255, 255, 255, 0.7); font-size: 0.45rem; backface-visibility: hidden; -webkit-backface-visibility: hidden;">
+                            F
+                        </div>
+                        <!-- Back side -->
+                        <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; border-radius: 4px; background: rgba(20, 20, 20, 0.95); transform: rotateY(180deg); backface-visibility: hidden; -webkit-backface-visibility: hidden; display: flex; justify-content: center; align-items: center; color: rgba(255, 255, 255, 0.4); font-size: 0.45rem;">
+                            B
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Tiny Telemetry values -->
+                <div style="font-size: 0.75rem; font-family: monospace; color: var(--text-muted); line-height: 1.4;">
+                    PITCH: <span id="telemetry-x" style="color: var(--accent-cyan); font-weight: 600;">0</span>°<br>
+                    ROLL:  <span id="telemetry-y" style="color: var(--accent-cyan); font-weight: 600;">0</span>°<br>
+                    YAW:   <span id="telemetry-z" style="color: var(--accent-cyan); font-weight: 600;">0</span>°
+                </div>
+            </div>
+
+            <div class="setting-row" style="margin-bottom: 20px;">
+                <span class="setting-label">Sensitivity</span>
+                <input type="range" class="setting-slider" id="slider-gyro-sensitivity" min="1" max="100" value="27">
+            </div>
+
+            <!-- Invert Scroll Setting Toggle -->
+            <div class="setting-row" style="margin-bottom: 20px; flex-direction: row; align-items: center; justify-content: space-between;">
+                <span class="setting-label" style="margin-bottom: 0;">Invert Scroll</span>
+                <input type="checkbox" id="checkbox-invert-scroll" style="width: 18px; height: 18px; accent-color: var(--accent-cyan);">
+            </div>
+            
+            <div style="display: flex; gap: 10px;">
+                <button class="action-btn" id="btn-calibrate-gyro" style="flex: 1; padding: 10px; font-size: 0.8rem;">Calibrate</button>
+                <button class="action-btn secondary" id="btn-close-settings" style="flex: 1; padding: 10px; font-size: 0.8rem;">Close</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <!-- Toast Notification -->
+    <div class="toast" id="toast-view">Notification</div>
+
+    <script>
+        // WS State
+        let ws = null;
+        let isConnected = false;
+
+        // UI Selectors
+        const statusDot = document.getElementById('status-dot');
+        const touchSurface = document.getElementById('touch-surface');
+        const touchIndicator = document.getElementById('touch-indicator');
+        const tabTrackpad = document.getElementById('tab-trackpad');
+        const tabAirmouse = document.getElementById('tab-airmouse');
+        const btnKeyboardToggle = document.getElementById('btn-keyboard-toggle');
+        const btnSettingsToggle = document.getElementById('btn-settings-toggle');
+        const settingsDrawer = document.getElementById('settings-drawer');
+        const btnCloseSettings = document.getElementById('btn-close-settings');
+        const btnCalibrateGyro = document.getElementById('btn-calibrate-gyro');
+        const sliderGyroSensitivity = document.getElementById('slider-gyro-sensitivity');
+        const checkboxInvertScroll = document.getElementById('checkbox-invert-scroll');
+        const btnMicDictate = document.getElementById('btn-mic-dictate');
+        const hiddenInput = document.getElementById('hidden-input');
+        const toastView = document.getElementById('toast-view');
+        const btnZoomToggle = document.getElementById('btn-zoom-toggle');
+        const btnZoomIn = document.getElementById('btn-zoom-in');
+        const btnZoomOut = document.getElementById('btn-zoom-out');
+        const zoomInOut = document.getElementById('zoom-inout');
+
+        // Mode state
+        let currentMode = 'trackpad'; // 'trackpad' or 'airmouse'
+        let gyroEnabled = false;
+        let airMouseActive = false;
+        let localGyro = {x: 0, y: 0, z: 0};
+        
+        let lastAlpha = null;
+        let lastBeta = null;
+        let lastGamma = null;
+        let lastOrientationTime = null;
+        let baseAlpha = null;
+        let baseBeta = null;
+        let baseGamma = null;
+
+        // Touch tracking variables
+        let lastX = 0;
+        let lastY = 0;
+        let lastTouchTime = 0;
+        let isMoving = false;
+        let dragModeActivated = false;
+        let dragDownSent = false;
+        let wasLastTouchTap = false;
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchStartTimestamp = 0;
+        let touchStartPageX = 0;
+        let touchStartPageY = 0;
+        let lastScrollX = 0;
+        let lastScrollY = 0;
+        let scrollThreshold = 8; // Pixels to distinguish tap/hold vs scroll
+        let airMouseTouchTimer = null;
+        let isAirMouseDragging = false;
+        let isAirMouseScrolling = false;
+        let isScrolling = false;
+        let isEdgeScrolling = false;
+        let isLeftEdgeGesture = false;
+        let isRightEdgeGesture = false;
+        let edgeScrollDirection = null;
+        let airmouseTouchCount = 0;
+        let keyboardPending = false; // Set when server signals a text field was focused
+
+        // Scroll smoothing state (exponential moving average on velocity)
+        let scrollVelX = 0;
+        let scrollVelY = 0;
+        const SCROLL_SMOOTH = 0.55; // EMA alpha: higher = more responsive, lower = smoother
+
+        // Shared scroll speed → multiplier curve:
+        //   0–1.5 px/frame  → dampen (0.25× at zero, ramping to 1.0×)
+        //   1.5–3 px/frame  → neutral (1.0×)
+        //   3+ px/frame     → gentle acceleration
+        function scrollFactor(speed) {
+            if (speed < 1.5) {
+                return 0.25 + (speed / 1.5) * 0.75; // 0.25 → 1.0 over the slow zone
+            } else if (speed > 3) {
+                return 1.0 + Math.pow(speed - 3, 1.05) * 0.10; // soft expo above 3px
+            }
+            return 1.0;
+        }
+
+        // Load settings from localStorage
+        const savedSensitivity = localStorage.getItem('gyro-sensitivity');
+        if (savedSensitivity !== null) {
+            sliderGyroSensitivity.value = savedSensitivity;
+        }
+        const savedInvertScroll = localStorage.getItem('invert-scroll');
+        if (savedInvertScroll !== null) {
+            checkboxInvertScroll.checked = savedInvertScroll === 'true';
+        }
+
+        // Save settings to localStorage on change
+        sliderGyroSensitivity.addEventListener('input', () => {
+            localStorage.setItem('gyro-sensitivity', sliderGyroSensitivity.value);
+        });
+        checkboxInvertScroll.addEventListener('change', () => {
+            localStorage.setItem('invert-scroll', checkboxInvertScroll.checked);
+        });
+
+        // Tab switching logic
+        tabTrackpad.addEventListener('click', (e) => {
+            e.stopPropagation();
+            tabTrackpad.classList.add('active');
+            tabAirmouse.classList.remove('active');
+            currentMode = 'trackpad';
+            showToast('Trackpad Mode');
+            vibrate(15);
+            updateAirMouseState();
+            sendPacket({type: 'click', button: 'left', action: 'up'});
+            sendPacket({type: 'click', button: 'right', action: 'up'});
+        });
+
+        tabAirmouse.addEventListener('click', (e) => {
+            e.stopPropagation();
+            tabAirmouse.classList.add('active');
+            tabTrackpad.classList.remove('active');
+            currentMode = 'airmouse';
+            showToast('Air Mouse Mode');
+            vibrate(15);
+            
+            checkSensorPermissions();
+            updateAirMouseState();
+            sendPacket({type: 'click', button: 'left', action: 'up'});
+            sendPacket({type: 'click', button: 'right', action: 'up'});
+        });
+
+        // Settings toggle
+        btnSettingsToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            settingsDrawer.classList.add('active');
+            vibrate(15);
+        });
+
+        btnCloseSettings.addEventListener('click', (e) => {
+            e.stopPropagation();
+            settingsDrawer.classList.remove('active');
+            vibrate(15);
+        });
+
+        // Haptic feedback helper — uses iOS 18 checkbox-switch trick as fallback for iOS Safari
+        const hapticSwitch = document.getElementById('haptic-switch');
+        let hapticLastTime = 0;
+        function vibrate(duration) {
+            if (navigator.vibrate) {
+                // Standard Vibration API (Android/Chrome)
+                navigator.vibrate(duration);
+            } else if (hapticSwitch) {
+                // iOS 18+ haptic: rapidly toggling a switch-style checkbox triggers system haptic
+                const now = Date.now();
+                const minInterval = Array.isArray(duration) ? 50 : Math.max(30, duration);
+                if (now - hapticLastTime < minInterval) return;
+                hapticLastTime = now;
+                hapticSwitch.checked = !hapticSwitch.checked;
+                // For patterns, fire multiple toggles
+                if (Array.isArray(duration) && duration.length > 1) {
+                    let delay = duration[0];
+                    for (let i = 1; i < Math.min(duration.length, 6); i++) {
+                        setTimeout(() => { hapticSwitch.checked = !hapticSwitch.checked; }, delay);
+                        delay += duration[i];
+                    }
+                }
+            }
+        }
+
+        // Display notifications
+        let toastTimeout;
+        function showToast(msg) {
+            clearTimeout(toastTimeout);
+            toastView.textContent = msg;
+            toastView.classList.add('show');
+            toastTimeout = setTimeout(() => {
+                toastView.classList.remove('show');
+            }, 2000);
+        }
+
+        // Setup Secure WebSocket connection
+        function connectWS() {
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            const url = `${proto}//${host}`;
+            
+            statusDot.className = "status-dot";
+            
+            ws = new WebSocket(url);
+            
+            ws.onopen = () => {
+                statusDot.className = "status-dot connected";
+                showToast("Connected to Mac!");
+                vibrate([40, 40, 40]);
+            };
+            
+            ws.onclose = () => {
+                statusDot.className = "status-dot";
+                showToast("Disconnected. Reconnecting...");
+                setTimeout(connectWS, 3000);
+            };
+
+            ws.onerror = (e) => {
+                console.error("WS error: ", e);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'focus_keyboard') {
+                        // iOS Safari blocks focus() from WS handlers (not a user gesture).
+                        // Pre-arm: next touch on the surface will open the keyboard.
+                        keyboardPending = true;
+                        showToast('⭐ Tap to type');
+                        vibrate(15);
+                    }
+                } catch (e) {}
+            };
+        }
+
+        // Send packet safely
+        function sendPacket(obj) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(obj));
+            }
+        }
+
+        // Send scroll event with customizable inversion
+        function sendScroll(dx, dy) {
+            const invert = checkboxInvertScroll ? checkboxInvertScroll.checked : false;
+            const mult = invert ? 1 : -1;
+            sendPacket({
+                type: 'scroll',
+                dx: dx * mult,
+                dy: dy * mult
+            });
+        }
+
+        // Unified Touch Surface Gestures
+        touchSurface.addEventListener('touchstart', (e) => {
+            const touches = e.touches;
+            const now = Date.now();
+
+            // If a text-field focus was signaled by the server, open keyboard on next touch.
+            // Must NOT call e.preventDefault() here — iOS Safari won't open the keyboard
+            // if the default touch behavior is cancelled before focus() fires.
+            if (keyboardPending) {
+                keyboardPending = false;
+                hiddenInput.focus();
+                showToast('⌨️ Keyboard ready');
+                return; // consume this touch for keyboard only
+            }
+
+            e.preventDefault();
+
+            if (currentMode === 'trackpad') {
+                if (touches.length === 1) {
+                    const touch = touches[0];
+                    touchStartX = touch.clientX;
+                    touchStartY = touch.clientY;
+                    lastX = touch.clientX;
+                    lastY = touch.clientY;
+                    touchStartTimestamp = now;
+                    isEdgeScrolling = false;
+                    
+                    const rect = touchSurface.getBoundingClientRect();
+                    const touchXRel = touch.clientX - rect.left;
+                    const touchYRel = touch.clientY - rect.top;
+                    // Left edge (leftmost 15%) → desktop switch gesture
+                    // Note: 15% avoids iOS system Back gesture interception at pixel-0
+                    if (touchXRel < rect.width * 0.15) {
+                        isLeftEdgeGesture = true;
+                        isMoving = false;
+                        vibrate(8);
+                        console.log('[Edge] Left edge zone hit at x=', touchXRel, 'of', rect.width);
+                    // Right edge (rightmost 10%) → vertical scroll strip
+                    } else if (touchXRel > rect.width * 0.90) {
+                        isEdgeScrolling = true;
+                        edgeScrollDirection = 'vertical';
+                        lastScrollY = touch.clientY;
+                        scrollVelY = 0;
+                        isMoving = false;
+                        vibrate(10);
+                    // Bottom edge (bottom 10%) → horizontal scroll
+                    } else if (touchYRel > rect.height * 0.90) {
+                        isEdgeScrolling = true;
+                        edgeScrollDirection = 'horizontal';
+                        lastScrollX = touch.clientX;
+                        scrollVelX = 0;
+                        isMoving = false;
+                        vibrate(10);
+                    } else {
+                        isMoving = true;
+                        // Position tracker indicator
+                        touchIndicator.style.left = `${touch.clientX}px`;
+                        touchIndicator.style.top = `${touch.clientY}px`;
+                        touchIndicator.style.opacity = '1';
+                        touchIndicator.style.transform = 'translate(-50%, -50%) scale(1)';
+
+                        // Double tap to drag detection: only if previous touch was a quick tap and within 300ms
+                        if (wasLastTouchTap && (now - lastTouchTime < 300)) {
+                            dragModeActivated = true;
+                            dragDownSent = false;
+                        }
+                    }
+                } else if (touches.length === 2) {
+                    isScrolling = true;
+                    isMoving = false;
+                    lastScrollY = (touches[0].clientY + touches[1].clientY) / 2;
+                    lastScrollX = (touches[0].clientX + touches[1].clientX) / 2;
+                    touchIndicator.style.opacity = '0';
+                }
+            } else if (currentMode === 'airmouse') {
+                airmouseTouchCount = Math.max(airmouseTouchCount, touches.length);
+                if (touches.length === 1) {
+                    const touch = touches[0];
+                    touchStartTimestamp = now;
+                    touchStartPageX = touch.pageX;
+                    touchStartPageY = touch.pageY;
+                    lastScrollX = touch.pageX;
+                    lastScrollY = touch.pageY;
+                    isAirMouseDragging = false;
+                    isAirMouseScrolling = false;
+
+                    // Start timer for touch-and-hold left-mouse-down drag
+                    clearTimeout(airMouseTouchTimer);
+                    airMouseTouchTimer = setTimeout(() => {
+                        if (!isAirMouseScrolling) {
+                            isAirMouseDragging = true;
+                            vibrate(30);
+                            sendPacket({type: 'click', button: 'left', action: 'down'});
+                            showToast('Drag active');
+                        }
+                    }, 220);
+                } else {
+                    clearTimeout(airMouseTouchTimer);
+                }
+            }
+        });
+
+        touchSurface.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const touches = e.touches;
+
+            if (currentMode === 'trackpad') {
+                if (touches.length === 1) {
+                    const touch = touches[0];
+                    if (isEdgeScrolling) {
+                        if (edgeScrollDirection === 'vertical') {
+                            const rawDY = touch.clientY - lastScrollY;
+                            lastScrollY = touch.clientY;
+                            if (Math.abs(rawDY) > 0.3) {
+                                scrollVelY = SCROLL_SMOOTH * rawDY + (1 - SCROLL_SMOOTH) * scrollVelY;
+                                const speed = Math.abs(scrollVelY);
+                                const out = Math.sign(scrollVelY) * scrollFactor(speed) * 0.40;
+                                sendScroll(0, out);
+                                if (speed > 5) vibrate(4);
+                            }
+                        } else if (edgeScrollDirection === 'horizontal') {
+                            const rawDX = touch.clientX - lastScrollX;
+                            lastScrollX = touch.clientX;
+                            if (Math.abs(rawDX) > 0.3) {
+                                scrollVelX = SCROLL_SMOOTH * rawDX + (1 - SCROLL_SMOOTH) * scrollVelX;
+                                const speed = Math.abs(scrollVelX);
+                                const out = Math.sign(scrollVelX) * scrollFactor(speed) * 0.40;
+                                sendScroll(out, 0);
+                                if (speed > 5) vibrate(4);
+                            }
+                        }
+                    } else if (isMoving) {
+                        if (dragModeActivated && !dragDownSent) {
+                            const dist = Math.sqrt((touch.clientX - touchStartX) ** 2 + (touch.clientY - touchStartY) ** 2);
+                            if (dist > 6) {
+                                sendPacket({type: 'click', button: 'left', action: 'down'});
+                                dragDownSent = true;
+                                vibrate(30);
+                                showToast('Drag active');
+                            }
+                        }
+
+                        // Only track movements if we are not in dragModeActivated or if we have already sent the drag-down
+                        if (!dragModeActivated || dragDownSent) {
+                            const dx = touch.clientX - lastX;
+                            const dy = touch.clientY - lastY;
+                            lastX = touch.clientX;
+                            lastY = touch.clientY;
+
+                            touchIndicator.style.left = `${touch.clientX}px`;
+                            touchIndicator.style.top = `${touch.clientY}px`;
+
+                            const speed = Math.sqrt(dx * dx + dy * dy);
+                            const baseSensitivity = 1.3;
+                            // Smooth acceleration starting at 2px/frame:
+                            // Below 2px → gentle precision dampen; above 2px → progressive expo boost with a flatter exponent.
+                            let factor;
+                            if (speed < 2) {
+                                factor = 0.45 + (speed / 2) * 0.55; // ramps 0.45 → 1.0 over 0–2px
+                            } else {
+                                factor = 1.0 + Math.pow(speed - 2, 1.1) * 0.10; // gentler exponent, shallower coefficient
+                            }
+
+                            sendPacket({
+                                type: 'trackpad',
+                                dx: dx * baseSensitivity * factor,
+                                dy: dy * baseSensitivity * factor
+                            });
+                        } else {
+                            // Still update lastX/lastY to follow the finger to avoid jumping when drag activates
+                            lastX = touch.clientX;
+                            lastY = touch.clientY;
+                            touchIndicator.style.left = `${touch.clientX}px`;
+                            touchIndicator.style.top = `${touch.clientY}px`;
+                        }
+                    }
+                } else if (touches.length === 2 && isScrolling) {
+                    const currentScrollY = (touches[0].clientY + touches[1].clientY) / 2;
+                    const currentScrollX = (touches[0].clientX + touches[1].clientX) / 2;
+                    const rawDY = currentScrollY - lastScrollY;
+                    const rawDX = currentScrollX - lastScrollX;
+                    lastScrollY = currentScrollY;
+                    lastScrollX = currentScrollX;
+
+                    if (Math.abs(rawDY) > 0.3 || Math.abs(rawDX) > 0.3) {
+                        // Smooth + accelerate two-finger scroll
+                        scrollVelY = SCROLL_SMOOTH * rawDY + (1 - SCROLL_SMOOTH) * scrollVelY;
+                        scrollVelX = SCROLL_SMOOTH * rawDX + (1 - SCROLL_SMOOTH) * scrollVelX;
+                        const speedY = Math.abs(scrollVelY);
+                        const speedX = Math.abs(scrollVelX);
+                        sendScroll(
+                            Math.sign(scrollVelX) * scrollFactor(speedX) * 0.35,
+                            Math.sign(scrollVelY) * scrollFactor(speedY) * 0.35
+                        );
+                        if (speedY > 6 || speedX > 6) vibrate(3);
+                    }
+                }
+            } else if (currentMode === 'airmouse') {
+                if (touches.length === 1) {
+                    const touch = touches[0];
+                    const distX = touch.pageX - touchStartPageX;
+                    const distY = touch.pageY - touchStartPageY;
+
+                    if (!isAirMouseDragging && !isAirMouseScrolling && (Math.abs(distX) > scrollThreshold || Math.abs(distY) > scrollThreshold)) {
+                        clearTimeout(airMouseTouchTimer);
+                        isAirMouseScrolling = true;
+                    }
+
+                    if (isAirMouseScrolling) {
+                        const deltaY = touch.pageY - lastScrollY;
+                        const deltaX = touch.pageX - lastScrollX;
+                        lastScrollY = touch.pageY;
+                        lastScrollX = touch.pageX;
+
+                        if (Math.abs(deltaY) > 0.5 || Math.abs(deltaX) > 0.5) {
+                            sendScroll(deltaX * 0.65, deltaY * 0.65);
+                        }
+                    }
+                }
+            }
+        });
+
+        touchSurface.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            const now = Date.now();
+
+            if (currentMode === 'trackpad') {
+                touchIndicator.style.opacity = '0';
+                touchIndicator.style.transform = 'translate(-50%, -50%) scale(0.5)';
+
+                // Calculate distance moved to verify if it's a tap or a drag
+                let dist = 0;
+                if (e.changedTouches && e.changedTouches[0]) {
+                    const t = e.changedTouches[0];
+                    const dx = t.clientX - touchStartX;
+                    const dy = t.clientY - touchStartY;
+                    dist = Math.sqrt(dx * dx + dy * dy);
+                }
+
+                if (dragModeActivated) {
+                    if (dragDownSent) {
+                        sendPacket({type: 'click', button: 'left', action: 'up'});
+                        showToast('Drag released');
+                        vibrate(10);
+                    } else {
+                        sendPacket({type: 'click', button: 'left', action: 'double_tap'});
+                        showToast('Double Click');
+                        vibrate([20, 20]);
+                    }
+                    dragModeActivated = false;
+                    dragDownSent = false;
+                    wasLastTouchTap = false;
+                } else if (isMoving && !isEdgeScrolling && (now - touchStartTimestamp < 220) && dist < 12) {
+                    sendPacket({type: 'click', button: 'left', action: 'tap'});
+                    vibrate(20);
+                    wasLastTouchTap = true;
+                } else {
+                    wasLastTouchTap = false;
+                }
+
+                if (e.changedTouches.length === 2 || (isScrolling && e.touches.length === 0)) {
+                    if (now - touchStartTimestamp < 250) {
+                        sendPacket({type: 'click', button: 'right', action: 'tap'});
+                        vibrate(25);
+                        showToast('Right Click');
+                    }
+                }
+
+                if (isLeftEdgeGesture && e.changedTouches && e.changedTouches[0]) {
+                    const dx = e.changedTouches[0].clientX - touchStartX;
+                    if (Math.abs(dx) > 40) {
+                        sendPacket({type: 'switch_desktop', direction: 'left'});
+                        showToast('← Prev Desktop');
+                        vibrate([20, 15]);
+                    }
+                    isLeftEdgeGesture = false;
+                }
+
+                if (isRightEdgeGesture && e.changedTouches && e.changedTouches[0]) {
+                    const dx = e.changedTouches[0].clientX - touchStartX;
+                    if (Math.abs(dx) > 40) {
+                        sendPacket({type: 'switch_desktop', direction: 'right'});
+                        showToast('→ Next Desktop');
+                        vibrate([20, 15]);
+                    }
+                    isRightEdgeGesture = false;
+                }
+
+                isMoving = false;
+                isScrolling = false;
+                isEdgeScrolling = false;
+                isLeftEdgeGesture = false;
+                isRightEdgeGesture = false;
+                // Reset scroll velocity so stale momentum never bleeds into the next gesture
+                scrollVelX = 0;
+                scrollVelY = 0;
+                lastTouchTime = now;
+            } else if (currentMode === 'airmouse') {
+                clearTimeout(airMouseTouchTimer);
+
+                if (isAirMouseDragging) {
+                    sendPacket({type: 'click', button: 'left', action: 'up'});
+                    showToast('Drag released');
+                    vibrate(10);
+                } else if (!isAirMouseScrolling) {
+                    if (airmouseTouchCount === 1 && (now - touchStartTimestamp < 220)) {
+                        sendPacket({type: 'click', button: 'left', action: 'tap'});
+                        vibrate(20);
+                    } else if (airmouseTouchCount === 2 && (now - touchStartTimestamp < 250)) {
+                        sendPacket({type: 'click', button: 'right', action: 'tap'});
+                        vibrate(25);
+                        showToast('Right Click');
+                    }
+                }
+                isAirMouseDragging = false;
+                isAirMouseScrolling = false;
+                airmouseTouchCount = 0;
+            }
+        });
+
+        // Keyboard triggers
+        btnKeyboardToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (document.activeElement === hiddenInput) {
+                hiddenInput.blur();
+                showToast('Keyboard hidden');
+            } else {
+                hiddenInput.focus();
+                showToast('Keyboard focused');
+            }
+            vibrate(20);
+        });
+
+        // Keep keyboard button visible at all times; it toggles focus/blur on click
+        hiddenInput.addEventListener('focus', () => {
+            // Don't hide the button — user may want to dismiss keyboard manually
+        });
+        hiddenInput.addEventListener('blur', () => {
+            btnKeyboardToggle.classList.remove('hidden');
+        });
+
+        // ── macOS Accessibility Zoom controls ────────────────────────────────
+        let zoomActive = false;
+        btnZoomToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            zoomActive = !zoomActive;
+            sendPacket({type: 'zoom', action: 'toggle'});
+            // Show/hide in/out buttons and highlight the toggle icon
+            zoomInOut.style.display = zoomActive ? 'flex' : 'none';
+            btnZoomToggle.style.color       = zoomActive ? 'var(--accent-cyan)' : '';
+            btnZoomToggle.style.borderColor = zoomActive ? 'var(--accent-cyan)' : '';
+            showToast(zoomActive ? '🔍 Zoom ON' : '🔍 Zoom OFF');
+            vibrate(20);
+        });
+        btnZoomIn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sendPacket({type: 'zoom', action: 'in'});
+            vibrate(10);
+        });
+        btnZoomOut.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sendPacket({type: 'zoom', action: 'out'});
+            vibrate(10);
+        });
+
+        hiddenInput.addEventListener('input', (e) => {
+            const text = hiddenInput.value;
+            if (text.length > 0) {
+                sendPacket({type: 'keyboard', text: text});
+                hiddenInput.value = '';
+            }
+        });
+
+        hiddenInput.addEventListener('keydown', (e) => {
+            const key = e.key;
+            if (key === 'Backspace') {
+                sendPacket({type: 'key', code: 'backspace'});
+                vibrate(10);
+            } else if (key === 'Enter') {
+                sendPacket({type: 'key', code: 'enter'});
+                vibrate(15);
+            } else if (key === ' ') {
+                sendPacket({type: 'key', code: 'space'});
+            } else if (key === 'Escape') {
+                sendPacket({type: 'key', code: 'escape'});
+            } else if (key === 'Tab') {
+                sendPacket({type: 'key', code: 'tab'});
+            }
+        });
+
+        // Air Mouse Controls
+        function checkSensorPermissions() {
+            if (typeof DeviceOrientationEvent !== 'undefined' && 
+                typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(state => {
+                        if (state === 'granted') {
+                            showToast('Sensors Enabled!');
+                            enableSensors();
+                            updateAirMouseState();
+                        } else {
+                            showToast('Permission denied');
+                        }
+                    })
+                    .catch(err => {
+                        console.error("Permission error: ", err);
+                        showToast('Failed to acquire permissions');
+                    });
+            } else {
+                enableSensors();
+                updateAirMouseState();
+            }
+        }
+
+        function enableSensors() {
+            if (gyroEnabled) return;
+            
+            window.addEventListener('deviceorientation', (e) => {
+                const alpha = e.alpha || 0;
+                const beta = e.beta || 0;
+                const gamma = e.gamma || 0;
+                
+                if (baseAlpha === null) {
+                    baseAlpha = alpha;
+                    baseBeta = beta;
+                    baseGamma = gamma;
+                }
+                
+                const isSettingsOpen = settingsDrawer.classList.contains('active');
+                if (isSettingsOpen) {
+                    document.getElementById('telemetry-x').textContent = Math.round(beta);
+                    document.getElementById('telemetry-y').textContent = Math.round(gamma);
+                    document.getElementById('telemetry-z').textContent = Math.round(alpha);
+                    
+                    let relAlpha = alpha - baseAlpha;
+                    if (relAlpha > 180) relAlpha -= 360;
+                    if (relAlpha < -180) relAlpha += 360;
+
+                    let relBeta = beta - baseBeta;
+                    if (relBeta > 180) relBeta -= 360;
+                    if (relBeta < -180) relBeta += 360;
+
+                    let relGamma = gamma - baseGamma;
+                    if (relGamma > 90) relGamma -= 180;
+                    if (relGamma < -90) relGamma += 180;
+                    
+                    const degToRad = Math.PI / 180;
+                    const a = relAlpha * degToRad;
+                    const b = relBeta * degToRad;
+                    const g = relGamma * degToRad;
+
+                    const cA = Math.cos(a), sA = Math.sin(a);
+                    const cB = Math.cos(b), sB = Math.sin(b);
+                    const cG = Math.cos(g), sG = Math.sin(g);
+
+                    const r11 = cA * cG - sA * sB * sG;
+                    const r12 = -sA * cB;
+                    const r13 = cA * sG + sA * sB * cG;
+
+                    const r21 = sA * cG + cA * sB * sG;
+                    const r22 = cA * cB;
+                    const r23 = sA * sG - cA * sB * cG;
+
+                    const r31 = -cB * sG;
+                    const r32 = sB;
+                    const r33 = cB * cG;
+
+                    const phone3D = document.getElementById('phone-3d');
+                    if (phone3D) {
+                        phone3D.style.transform = `matrix3d(
+                            ${r11.toFixed(6)}, ${r21.toFixed(6)}, ${r31.toFixed(6)}, 0,
+                            ${r12.toFixed(6)}, ${r22.toFixed(6)}, ${r32.toFixed(6)}, 0,
+                            ${r13.toFixed(6)}, ${r23.toFixed(6)}, ${r33.toFixed(6)}, 0,
+                            0, 0, 0, 1
+                        )`;
+                    }
+                }
+
+                const now = performance.now();
+                if (lastOrientationTime && lastAlpha !== null) {
+                    const dt = (now - lastOrientationTime) / 1000.0;
+                    
+                    if (dt > 0.005 && dt < 0.2) {
+                        let dAlpha = alpha - lastAlpha;
+                        if (dAlpha > 180) dAlpha -= 360;
+                        if (dAlpha < -180) dAlpha += 360;
+
+                        let dBeta = beta - lastBeta;
+                        if (dBeta > 180) dBeta -= 360;
+                        if (dBeta < -180) dBeta += 360;
+
+                        let dGamma = gamma - lastGamma;
+                        if (dGamma > 90) dGamma -= 180;
+                        if (dGamma < -90) dGamma += 180;
+
+                        localGyro.x = dAlpha / dt;
+                        localGyro.y = dBeta / dt;
+                        localGyro.z = dGamma / dt;
+
+                        let isLandscape = false;
+                        let orientationAngle = 0;
+                        if (typeof window.orientation !== 'undefined') {
+                            orientationAngle = window.orientation;
+                        } else if (screen && screen.orientation) {
+                            orientationAngle = screen.orientation.angle;
+                        }
+                        
+                        const sensMultiplier = parseFloat(sliderGyroSensitivity.value) / 10.0;
+                        if (airMouseActive) {
+                            sendPacket({
+                                type: 'motion',
+                                rx: localGyro.x * sensMultiplier,
+                                ry: localGyro.y * sensMultiplier,
+                                rz: localGyro.z * sensMultiplier
+                            });
+                        }
+                    }
+                }
+
+                lastAlpha = alpha;
+                lastBeta = beta;
+                lastGamma = gamma;
+                lastOrientationTime = now;
+            });
+
+            gyroEnabled = true;
+        }
+
+        function updateAirMouseState() {
+            if (currentMode === 'airmouse') {
+                airMouseActive = true;
+                
+                baseAlpha = null;
+                baseBeta = null;
+                baseGamma = null;
+                lastAlpha = null;
+                lastBeta = null;
+                lastGamma = null;
+                lastOrientationTime = null;
+            } else {
+                airMouseActive = false;
+                
+                const phone3D = document.getElementById('phone-3d');
+                if (phone3D) {
+                    phone3D.style.transform = `rotateX(0deg) rotateY(0deg) rotateZ(0deg)`;
+                }
+                document.getElementById('telemetry-x').textContent = '0';
+                document.getElementById('telemetry-y').textContent = '0';
+                document.getElementById('telemetry-z').textContent = '0';
+            }
+        }
+
+        btnCalibrateGyro.addEventListener('click', (e) => {
+            e.stopPropagation();
+            vibrate(30);
+            sendPacket({type: 'calibrate'});
+            showToast('Calibrated baseline');
+            
+            baseAlpha = null;
+            baseBeta = null;
+            baseGamma = null;
+            lastAlpha = null;
+            lastBeta = null;
+            lastGamma = null;
+            lastOrientationTime = null;
+        });
+
+        // Handle visual viewport resizing (e.g. keyboard showing/hiding)
+        if (window.visualViewport) {
+            const updatePillPosition = () => {
+                const pill = document.querySelector('.hud-control-pill');
+                const actionsIsland = document.getElementById('bottom-actions-island');
+                
+                const viewportHeight = window.visualViewport.height;
+                const windowHeight = window.innerHeight;
+                const keyboardHeight = windowHeight - viewportHeight;
+                
+                if (pill) {
+                    pill.style.top = `${window.visualViewport.offsetTop + 24}px`;
+                }
+                
+                if (actionsIsland) {
+                    if (keyboardHeight > 60) {
+                        actionsIsland.style.bottom = `${keyboardHeight + 20}px`;
+                    } else {
+                        actionsIsland.style.bottom = 'calc(env(safe-area-inset-bottom, 0px) + 36px)';
+                    }
+                }
+            };
+            
+            window.visualViewport.addEventListener('resize', updatePillPosition);
+            window.visualViewport.addEventListener('scroll', updatePillPosition);
+        }
+
+        // Voice Dictation (Hold to Speak) via Web Speech API
+        let SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let speechRecognizer = null;
+        let isSpeechRecording = false;
+        let recognitionActive = false;
+        let stopPending = false;
+        let stopTimeout = null;
+
+        if (SpeechRecognition) {
+            speechRecognizer = new SpeechRecognition();
+            speechRecognizer.continuous = false;
+            speechRecognizer.interimResults = false;
+            speechRecognizer.lang = navigator.language || 'en-US';
+
+            speechRecognizer.onstart = () => {
+                recognitionActive = true;
+                if (stopPending) {
+                    speechRecognizer.stop();
+                    stopPending = false;
+                }
+            };
+
+            speechRecognizer.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                if (transcript) {
+                    sendPacket({type: 'keyboard', text: transcript});
+                    showToast(`Typed: "${transcript}"`);
+                }
+            };
+
+            speechRecognizer.onerror = (event) => {
+                console.error("Speech recognition error: ", event.error);
+                if (event.error !== 'aborted') {
+                    showToast("Speech Error: " + event.error);
+                }
+                recognitionActive = false;
+                stopPending = false;
+                isSpeechRecording = false;
+                btnMicDictate.classList.remove('recording');
+                btnMicDictate.classList.remove('processing');
+                clearTimeout(stopTimeout);
+            };
+
+            speechRecognizer.onend = () => {
+                recognitionActive = false;
+                stopPending = false;
+                isSpeechRecording = false;
+                btnMicDictate.classList.remove('recording');
+                btnMicDictate.classList.remove('processing');
+                clearTimeout(stopTimeout);
+            };
+
+            // Touch event listeners for hold-to-speak
+            btnMicDictate.addEventListener('touchstart', (e) => {
+                e.stopPropagation();
+                
+                // If currently processing a previous release, cancel the stop timer and return to recording
+                if (btnMicDictate.classList.contains('processing')) {
+                    clearTimeout(stopTimeout);
+                    btnMicDictate.classList.remove('processing');
+                    btnMicDictate.classList.add('recording');
+                    isSpeechRecording = true;
+                    vibrate(40);
+                    return;
+                }
+
+                if (isSpeechRecording) return;
+
+                isSpeechRecording = true;
+                stopPending = false;
+                recognitionActive = false;
+                vibrate(40);
+                btnMicDictate.classList.add('recording');
+
+                try {
+                    speechRecognizer.start();
+                } catch (err) {
+                    console.error("Error starting speech recognizer: ", err);
+                    showToast("Mic start failed: " + err.message);
+                    isSpeechRecording = false;
+                    recognitionActive = false;
+                    stopPending = false;
+                    btnMicDictate.classList.remove('recording');
+                }
+            });
+
+            const handleTouchEnd = (e) => {
+                e.stopPropagation();
+                if (!isSpeechRecording) return;
+
+                isSpeechRecording = true; // Stay in speech recording state during transition
+                isSpeechRecording = false;
+                vibrate(15);
+                
+                // Shift visual state to "processing" to show active server analysis
+                btnMicDictate.classList.remove('recording');
+                btnMicDictate.classList.add('processing');
+                
+                // Delay stop call by 750ms so speech buffer flushes completely to the browser backend
+                clearTimeout(stopTimeout);
+                stopTimeout = setTimeout(() => {
+                    if (recognitionActive) {
+                        speechRecognizer.stop();
+                    } else {
+                        stopPending = true;
+                    }
+                }, 750);
+            };
+
+            btnMicDictate.addEventListener('touchend', handleTouchEnd);
+            btnMicDictate.addEventListener('touchcancel', handleTouchEnd);
+        } else {
+            // Hide dictation button if Speech Recognition is not supported in browser
+            const btnMic = document.getElementById('btn-mic-dictate');
+            if (btnMic) {
+                btnMic.style.display = 'none';
+            }
+        }
+
+        // Initialize connection
+        connectWS();
+
+        // ── Screen Wake Lock ──────────────────────────────────────────────
+        // Prevents the phone screen from sleeping while the app is open.
+        // Re-acquires automatically when the tab becomes visible again.
+        let wakeLock = null;
+
+        async function acquireWakeLock() {
+            if (!('wakeLock' in navigator)) return; // Not supported (iOS < 16.4)
+            try {
+                wakeLock = await navigator.wakeLock.request('screen');
+                console.log('[WakeLock] Screen lock acquired');
+                wakeLock.addEventListener('release', () => {
+                    console.log('[WakeLock] Released');
+                    wakeLock = null;
+                });
+            } catch (err) {
+                // User denied or device doesn't support — silent fail
+                console.warn('[WakeLock] Could not acquire:', err.message);
+            }
+        }
+
+        // Re-acquire when the page comes back into view (e.g. after switching app)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && !wakeLock) {
+                acquireWakeLock();
+            }
+        });
+
+        acquireWakeLock();
+    </script>
+</body>
+</html>
