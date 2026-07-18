@@ -270,6 +270,71 @@
 
 
 
+        /* Pairing PIN Overlay */
+        .pairing-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            z-index: 300;
+        }
+
+        .pairing-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .pairing-content {
+            background: rgba(20, 20, 25, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 28px 24px;
+            width: 85%;
+            max-width: 320px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+        }
+
+        .pairing-content h4 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .pairing-content p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+
+        #pairing-pin-input {
+            width: 100%;
+            font-size: 1.6rem;
+            letter-spacing: 6px;
+            text-align: center;
+            font-family: 'Outfit', monospace;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            color: var(--text-color);
+            padding: 12px;
+            outline: none;
+        }
+
+        #pairing-error {
+            min-height: 16px;
+            font-size: 0.72rem;
+            color: #ff453a;
+            margin-top: 10px;
+        }
+
         /* Toast Notifications */
         .toast {
             position: fixed;
@@ -667,7 +732,22 @@
                 <span class="setting-label" style="margin-bottom: 0;">Invert Scroll</span>
                 <input type="checkbox" id="checkbox-invert-scroll" style="width: 18px; height: 18px; accent-color: var(--accent-cyan);">
             </div>
-            
+
+            <!-- Keyboard Shortcuts -->
+            <div class="setting-row" style="margin-bottom: 20px;">
+                <span class="setting-label">Shortcuts</span>
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <button class="action-btn secondary shortcut-btn" data-code="c" data-mods="cmd" style="flex:1; min-width:60px; padding:8px; font-size:0.75rem;">⌘C</button>
+                    <button class="action-btn secondary shortcut-btn" data-code="v" data-mods="cmd" style="flex:1; min-width:60px; padding:8px; font-size:0.75rem;">⌘V</button>
+                    <button class="action-btn secondary shortcut-btn" data-code="x" data-mods="cmd" style="flex:1; min-width:60px; padding:8px; font-size:0.75rem;">⌘X</button>
+                    <button class="action-btn secondary shortcut-btn" data-code="z" data-mods="cmd" style="flex:1; min-width:60px; padding:8px; font-size:0.75rem;">⌘Z</button>
+                    <button class="action-btn secondary shortcut-btn" data-code="a" data-mods="cmd" style="flex:1; min-width:60px; padding:8px; font-size:0.75rem;">⌘A</button>
+                    <button class="action-btn secondary shortcut-btn" data-code="tab" data-mods="cmd" style="flex:1; min-width:60px; padding:8px; font-size:0.75rem;">⌘Tab</button>
+                    <button class="action-btn secondary shortcut-btn" data-code="space" data-mods="cmd" style="flex:1; min-width:60px; padding:8px; font-size:0.75rem;">⌘Space</button>
+                    <button class="action-btn secondary shortcut-btn" data-code="q" data-mods="cmd" style="flex:1; min-width:60px; padding:8px; font-size:0.75rem;">⌘Q</button>
+                </div>
+            </div>
+
             <div style="display: flex; gap: 10px;">
                 <button class="action-btn" id="btn-calibrate-gyro" style="flex: 1; padding: 10px; font-size: 0.8rem;">Calibrate</button>
                 <button class="action-btn secondary" id="btn-close-settings" style="flex: 1; padding: 10px; font-size: 0.8rem;">Close</button>
@@ -677,6 +757,17 @@
 
 
 
+    <!-- Pairing PIN Overlay -->
+    <div class="pairing-overlay" id="pairing-overlay">
+        <div class="pairing-content">
+            <h4>Enter Pairing PIN</h4>
+            <p>Shown in the Mac's terminal window</p>
+            <input type="text" id="pairing-pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="000000">
+            <button class="action-btn" id="btn-pairing-submit" style="margin-top:16px;width:100%;">Pair</button>
+            <div id="pairing-error"></div>
+        </div>
+    </div>
+
     <!-- Toast Notification -->
     <div class="toast" id="toast-view">Notification</div>
 
@@ -684,6 +775,14 @@
         // WS State
         let ws = null;
         let isConnected = false;
+        let authenticated = false;
+        let sessionToken = localStorage.getItem('session-token');
+
+        // Pairing UI
+        const pairingOverlay = document.getElementById('pairing-overlay');
+        const pairingPinInput = document.getElementById('pairing-pin-input');
+        const btnPairingSubmit = document.getElementById('btn-pairing-submit');
+        const pairingError = document.getElementById('pairing-error');
 
         // UI Selectors
         const statusDot = document.getElementById('status-dot');
@@ -751,6 +850,39 @@
         let scrollVelX = 0;
         let scrollVelY = 0;
         const SCROLL_SMOOTH = 0.55; // EMA alpha: higher = more responsive, lower = smoother
+
+        // Momentum ("flick") scrolling — decays the last scroll velocity after
+        // release instead of stopping dead, using the same velocity EMA above.
+        let momentumRAF = null;
+        const MOMENTUM_FRICTION = 0.93; // per-frame decay
+        const MOMENTUM_MIN_VELOCITY = 1.2; // px/frame — below this, don't bother
+
+        function cancelMomentumScroll() {
+            if (momentumRAF) {
+                cancelAnimationFrame(momentumRAF);
+                momentumRAF = null;
+            }
+        }
+
+        function startMomentumScroll(vx, vy) {
+            cancelMomentumScroll();
+            if (Math.abs(vx) < MOMENTUM_MIN_VELOCITY && Math.abs(vy) < MOMENTUM_MIN_VELOCITY) return;
+            let velX = vx, velY = vy;
+            function step() {
+                velX *= MOMENTUM_FRICTION;
+                velY *= MOMENTUM_FRICTION;
+                if (Math.abs(velX) < 0.1 && Math.abs(velY) < 0.1) {
+                    momentumRAF = null;
+                    return;
+                }
+                sendScroll(
+                    Math.sign(velX) * scrollFactor(Math.abs(velX)) * 0.35,
+                    Math.sign(velY) * scrollFactor(Math.abs(velY)) * 0.35
+                );
+                momentumRAF = requestAnimationFrame(step);
+            }
+            momentumRAF = requestAnimationFrame(step);
+        }
 
         // Shared scroll speed → multiplier curve:
         //   0–1.5 px/frame  → dampen (0.25× at zero, ramping to 1.0×)
@@ -873,10 +1005,17 @@
                 statusDot.className = "status-dot connected";
                 showToast("Connected to Mac!");
                 vibrate([40, 40, 40]);
+                authenticated = false;
+                if (sessionToken) {
+                    sendRaw({type: 'auth', token: sessionToken});
+                } else {
+                    showPairingOverlay();
+                }
             };
-            
+
             ws.onclose = () => {
                 statusDot.className = "status-dot";
+                authenticated = false;
                 showToast("Disconnected. Reconnecting...");
                 setTimeout(connectWS, 3000);
             };
@@ -894,16 +1033,63 @@
                         keyboardPending = true;
                         showToast('⭐ Tap to type');
                         vibrate(15);
+                    } else if (msg.type === 'auth_ok') {
+                        authenticated = true;
+                        sessionToken = msg.token;
+                        localStorage.setItem('session-token', sessionToken);
+                        hidePairingOverlay();
+                        showToast('Paired with Mac!');
+                        vibrate(20);
+                    } else if (msg.type === 'auth_fail') {
+                        authenticated = false;
+                        if (msg.reason === 'rate_limited') {
+                            pairingError.textContent = 'Too many attempts. Wait a bit and try again.';
+                        } else {
+                            localStorage.removeItem('session-token');
+                            sessionToken = null;
+                            pairingError.textContent = 'Incorrect PIN. Check the Mac terminal and try again.';
+                        }
+                        showPairingOverlay();
                     }
                 } catch (e) {}
             };
         }
 
-        // Send packet safely
-        function sendPacket(obj) {
+        function showPairingOverlay() {
+            pairingOverlay.classList.add('active');
+            setTimeout(() => pairingPinInput.focus(), 100);
+        }
+
+        function hidePairingOverlay() {
+            pairingOverlay.classList.remove('active');
+            pairingPinInput.value = '';
+            pairingError.textContent = '';
+        }
+
+        btnPairingSubmit.addEventListener('click', () => {
+            const pin = pairingPinInput.value.trim();
+            if (pin.length < 4) {
+                pairingError.textContent = 'Enter the PIN shown on the Mac.';
+                return;
+            }
+            pairingError.textContent = '';
+            sendRaw({type: 'auth', pin: pin});
+        });
+        pairingPinInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') btnPairingSubmit.click();
+        });
+
+        // Send a packet regardless of pairing state — used only for the auth handshake itself
+        function sendRaw(obj) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(obj));
             }
+        }
+
+        // Send packet safely — control messages are dropped until the Mac has confirmed pairing
+        function sendPacket(obj) {
+            if (!authenticated) return;
+            sendRaw(obj);
         }
 
         // Send scroll event with customizable inversion
@@ -921,6 +1107,7 @@
         touchSurface.addEventListener('touchstart', (e) => {
             const touches = e.touches;
             const now = Date.now();
+            cancelMomentumScroll();
 
             // If a text-field focus was signaled by the server, open keyboard on next touch.
             // Must NOT call e.preventDefault() here — iOS Safari won't open the keyboard
@@ -1205,12 +1392,17 @@
                     isRightEdgeGesture = false;
                 }
 
+                // Hand off remaining scroll velocity to momentum before clearing it
+                if (isScrolling || isEdgeScrolling) {
+                    startMomentumScroll(scrollVelX, scrollVelY);
+                }
+
                 isMoving = false;
                 isScrolling = false;
                 isEdgeScrolling = false;
                 isLeftEdgeGesture = false;
                 isRightEdgeGesture = false;
-                // Reset scroll velocity so stale momentum never bleeds into the next gesture
+                // Reset scroll velocity so stale momentum state never bleeds into the next gesture
                 scrollVelX = 0;
                 scrollVelY = 0;
                 lastTouchTime = now;
@@ -1282,6 +1474,16 @@
             vibrate(10);
         });
 
+        // Keyboard shortcuts (Cmd+C, Cmd+Tab, etc.)
+        document.querySelectorAll('.shortcut-btn').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                sendPacket({type: 'key', code: btn.dataset.code, modifiers: btn.dataset.mods.split(',')});
+                vibrate(15);
+                showToast(btn.textContent + ' sent');
+            });
+        });
+
         hiddenInput.addEventListener('input', (e) => {
             const text = hiddenInput.value;
             if (text.length > 0) {
@@ -1292,17 +1494,25 @@
 
         hiddenInput.addEventListener('keydown', (e) => {
             const key = e.key;
+            // preventDefault stops the browser from also inserting the character into
+            // the input (which would fire 'input' and double-send it, e.g. two spaces
+            // per tap) and, for Tab, from shifting focus away from the hidden input.
             if (key === 'Backspace') {
+                e.preventDefault();
                 sendPacket({type: 'key', code: 'backspace'});
                 vibrate(10);
             } else if (key === 'Enter') {
+                e.preventDefault();
                 sendPacket({type: 'key', code: 'enter'});
                 vibrate(15);
             } else if (key === ' ') {
+                e.preventDefault();
                 sendPacket({type: 'key', code: 'space'});
             } else if (key === 'Escape') {
+                e.preventDefault();
                 sendPacket({type: 'key', code: 'escape'});
             } else if (key === 'Tab') {
+                e.preventDefault();
                 sendPacket({type: 'key', code: 'tab'});
             }
         });

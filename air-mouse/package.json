@@ -13,11 +13,13 @@
   },
   "dependencies": {
     "@raycast/api": "^1.103.0",
-    "@raycast/utils": "^2.2.1"
+    "@raycast/utils": "^2.2.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@raycast/eslint-config": "^2.0.4",
     "@types/node": "22.19.17",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "19.0.10",
     "eslint": "^9.22.0",
     "prettier": "^3.5.3",
@@ -33,13 +35,21 @@
       "subtitle": ""
     }
   ],
+  "preferences": [
+    {
+      "name": "workspaceDir",
+      "title": "Air Mouse Server Directory",
+      "description": "Folder containing mouse_controller.py. Leave blank to auto-detect (works when this extension is run from within the Air Mouse repo checkout).",
+      "type": "directory",
+      "required": false
+    }
+  ],
   "title": "Air Mouse",
   "author": "robert_bruhns",
   "platforms": [
-    "Windows",
     "macOS"
   ],
   "categories": [
-    "Fun"
+    "Productivity"
   ]
 }

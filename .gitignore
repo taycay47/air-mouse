@@ -1,9 +1,12 @@
 .DS_Store
 .venv/
+__pycache__/
 
-# TLS cert/key are generated locally on first run — never commit private key material
+# TLS cert/key and paired-device tokens are generated locally on first run —
+# never commit private key material or pairing secrets
 cert.pem
 key.pem
+paired_devices.json
 
 # Node / Raycast extension
 air-mouse/node_modules/
@@ -12,3 +15,7 @@ air-mouse/.swiftpm/
 air-mouse/compiled_raycast_swift/
 air-mouse/compiled_raycast_rust/
 air-mouse/raycast-env.d.ts
+
+# Swift menu bar app build output
+menubar/.build/
+menubar/AirMouseBar.app/
