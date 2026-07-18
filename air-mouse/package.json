@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "air-mouse",
-  "description": "Use phone as mouse",
+  "description": "Turn your phone into a wireless trackpad or air mouse for your Mac — scan a QR code, no app install needed",
   "license": "MIT",
   "scripts": {
     "dev": "ray develop",
@@ -31,8 +31,8 @@
       "mode": "view",
       "name": "air-mouse",
       "title": "Air Mouse",
-      "description": "Use phone as mouse",
-      "subtitle": ""
+      "description": "Start the pairing server and show the QR code to connect your phone",
+      "subtitle": "Wireless Trackpad"
     }
   ],
   "preferences": [
