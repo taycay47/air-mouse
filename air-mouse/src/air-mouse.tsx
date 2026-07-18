@@ -1,5 +1,14 @@
 import { useState, useEffect } from "react";
-import { List, Detail, ActionPanel, Action, showToast, Toast, getPreferenceValues, environment } from "@raycast/api";
+import {
+  List,
+  Detail,
+  ActionPanel,
+  Action,
+  showToast,
+  Toast,
+  getPreferenceValues,
+  environment,
+} from "@raycast/api";
 import { exec, spawn } from "child_process";
 import fs from "fs";
 import os from "os";
@@ -18,7 +27,10 @@ interface Preferences {
 // extension lives inside the same repo checkout.
 function findWorkspaceDir(): string {
   const prefs = getPreferenceValues<Preferences>();
-  if (prefs.workspaceDir && fs.existsSync(path.join(prefs.workspaceDir, "mouse_controller.py"))) {
+  if (
+    prefs.workspaceDir &&
+    fs.existsSync(path.join(prefs.workspaceDir, "mouse_controller.py"))
+  ) {
     return prefs.workspaceDir;
   }
 
@@ -51,16 +63,22 @@ interface NetworkInterface {
 // Check if port is in use (server running) by attempting a connection
 function checkPort(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const client = net.createConnection({ port, host: "127.0.0.1", timeout: 150 }, () => {
-      client.end();
-      resolve(true); // Connected successfully => server is running
-    });
+    const client = net.createConnection(
+      { port, host: "127.0.0.1", timeout: 150 },
+      () => {
+        client.end();
+        resolve(true); // Connected successfully => server is running
+      },
+    );
     client.on("error", () => {
       // If IPv4 loopback fails, check IPv6 loopback
-      const client6 = net.createConnection({ port, host: "::1", timeout: 150 }, () => {
-        client6.end();
-        resolve(true);
-      });
+      const client6 = net.createConnection(
+        { port, host: "::1", timeout: 150 },
+        () => {
+          client6.end();
+          resolve(true);
+        },
+      );
       client6.on("error", () => {
         resolve(false); // Both failed => server is stopped
       });
@@ -110,7 +128,8 @@ function getNetworkInterfaces(): NetworkInterface[] {
     type: "Bonjour",
     address: bonjourName,
     url: `https://${bonjourName}:${SERVER_PORT}`,
-    description: "Standard local hostname resolution. Highly stable on home and office Wi-Fi routers.",
+    description:
+      "Standard local hostname resolution. Highly stable on home and office Wi-Fi routers.",
   });
 
   const interfaces = os.networkInterfaces();
@@ -132,13 +151,18 @@ function getNetworkInterfaces(): NetworkInterface[] {
             type: "Tailscale",
             address: ip,
             url: `https://${ip}:${SERVER_PORT}`,
-            description: "Direct secure connection over the Tailscale VPN. Requires Tailscale running on both devices.",
+            description:
+              "Direct secure connection over the Tailscale VPN. Requires Tailscale running on both devices.",
           });
         }
       }
 
       // 3. Global IPv6
-      if (netInterface.family === "IPv6" && !ip.startsWith("fe80") && !ip.startsWith("::1")) {
+      if (
+        netInterface.family === "IPv6" &&
+        !ip.startsWith("fe80") &&
+        !ip.startsWith("::1")
+      ) {
         const wrappedIp = `[${ip}]`;
         list.push({
           name: "Global IPv6",
@@ -151,13 +175,18 @@ function getNetworkInterfaces(): NetworkInterface[] {
       }
 
       // 4. Local IPv4
-      if (netInterface.family === "IPv4" && !ip.startsWith("127.") && !ip.startsWith("100.")) {
+      if (
+        netInterface.family === "IPv4" &&
+        !ip.startsWith("127.") &&
+        !ip.startsWith("100.")
+      ) {
         list.push({
           name: `Local IPv4 (${name})`,
           type: "IPv4",
           address: ip,
           url: `https://${ip}:${SERVER_PORT}`,
-          description: "Standard local IPv4 address. Standard for routers, though cellular hotspots often isolate client IPs.",
+          description:
+            "Standard local IPv4 address. Standard for routers, though cellular hotspots often isolate client IPs.",
         });
       }
     }
@@ -195,7 +224,10 @@ export default function Command() {
       const entries = await Promise.all(
         list.map(async (item) => {
           try {
-            const dataUrl = await QRCode.toDataURL(item.url, { margin: 1, width: 320 });
+            const dataUrl = await QRCode.toDataURL(item.url, {
+              margin: 1,
+              width: 320,
+            });
             return [item.url, dataUrl] as const;
           } catch {
             return [item.url, ""] as const;
@@ -346,10 +378,25 @@ Because we use a self-signed SSL certificate:
             detail={<List.Item.Detail markdown={md} />}
             actions={
               <ActionPanel>
-                <Action.CopyToClipboard title="Copy Connection URL" content={item.url} />
-                {pin && <Action.CopyToClipboard title="Copy Pairing PIN" content={pin} />}
-                <Action.OpenInBrowser title="Open Connection Locally" url={item.url} />
-                <Action title="Stop Server" onAction={handleStop} style={Action.Style.Destructive} />
+                <Action.CopyToClipboard
+                  title="Copy Connection URL"
+                  content={item.url}
+                />
+                {pin && (
+                  <Action.CopyToClipboard
+                    title="Copy Pairing PIN"
+                    content={pin}
+                  />
+                )}
+                <Action.OpenInBrowser
+                  title="Open Connection Locally"
+                  url={item.url}
+                />
+                <Action
+                  title="Stop Server"
+                  onAction={handleStop}
+                  style={Action.Style.Destructive}
+                />
               </ActionPanel>
             }
           />
