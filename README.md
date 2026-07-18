@@ -67,17 +67,3 @@ all connections. Paired device tokens are stored in `paired_devices.json`
 This is meant for trusted local networks, not adversarial ones: the PIN is a
 deterrent against casual/opportunistic connections from other devices on the
 same Wi-Fi, not a substitute for network-level trust.
-
-## Known limitations
-
-- **Media keys** (volume, play/pause, etc.) are not implemented. The obvious
-  approaches — posting specific CoreGraphics keycodes for volume/mute, and
-  building an NSEvent-based "system-defined" HID event for play/pause via a
-  hand-rolled ctypes bridge to the Objective-C runtime (to avoid a PyObjC
-  dependency) — were both tried and confirmed *not* to work via live testing
-  on this machine (mouse/keyboard injection through the same CGEventPost path
-  works fine; these specific synthetic key types just don't get honored by
-  modern macOS from an unentitled process). A native Swift implementation
-  using AppKit's `NSEvent` directly, or adding PyObjC as a dependency, would
-  sidestep the problem.
-- macOS only.
