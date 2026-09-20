@@ -27,11 +27,21 @@ permissions:
 jobs:
   build-and-release:
     runs-on: macos-14
+    # The `secrets` context is not available in a step's `if:` — using it there
+    # makes the whole workflow file invalid, which GitHub reports as a run that
+    # fails in 0s with no jobs rather than as a syntax error. Job-level `env`
+    # may read secrets and *is* in scope for `if:`, so the presence tests are
+    # hoisted here and the steps below branch on these instead.
+    env:
+      HAS_SIGNING_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+      HAS_NOTARY_KEY: ${{ secrets.AC_API_KEY_P8 != '' }}
+      HAS_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+      SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Import signing certificate
-        if: ${{ secrets.MACOS_CERT_P12 != '' }}
+        if: env.HAS_SIGNING_CERT == 'true'
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -65,7 +75,7 @@ jobs:
           ./make_dmg.sh release
 
       - name: Notarize and staple
-        if: ${{ secrets.AC_API_KEY_P8 != '' }}
+        if: env.HAS_NOTARY_KEY == 'true'
         env:
           AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
           AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
@@ -83,7 +93,7 @@ jobs:
           rm api_key.p8
 
       - name: Generate Sparkle appcast
-        if: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+        if: env.HAS_SPARKLE_KEY == 'true'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           DOWNLOAD_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/
@@ -117,7 +127,7 @@ jobs:
           # first launch of an unsigned build, and labelling that as a finished
           # release sets an expectation the download does not meet.
           PRERELEASE=""
-          [ -z "${{ secrets.MACOS_SIGN_IDENTITY }}" ] && PRERELEASE="--prerelease"
+          [ -z "$SIGN_IDENTITY" ] && PRERELEASE="--prerelease"
 
           # Built in a file rather than inline: YAML's block scalar strips this
           # indentation before the shell sees it, so the heredoc lands at column
