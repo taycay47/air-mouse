@@ -100,6 +100,14 @@ PLIST
 # Sparkle configuration, injected so the key never has to live in this script.
 #   SU_FEED_URL       — appcast.xml URL (GitHub Releases or raw.githubusercontent)
 #   SU_PUBLIC_ED_KEY  — output of Sparkle's generate_keys
+# Version. Sparkle decides whether an update exists by comparing CFBundleVersion,
+# so a hardcoded one means no build is ever newer than the one already installed
+# and the updater silently never fires — which would quietly defeat the whole
+# point of ADR-0009. CI passes the git tag; local builds get an obvious 0.0.0.
+APP_VERSION="${APP_VERSION:-0.0.0}"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS_DIR/Info.plist"
+
 FEED_URL="${SU_FEED_URL:-https://github.com/taycay47/air-mouse/releases/latest/download/appcast.xml}"
 # Not a secret: it ships in every copy of the app. Its whole job is to let the app
 # reject an update that wasn't signed with the matching private key. Hardcoded so

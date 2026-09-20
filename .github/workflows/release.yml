@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Import signing certificate
-        if: ${{ env.MACOS_CERT_P12 != '' }}
+        if: ${{ secrets.MACOS_CERT_P12 != '' }}
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -55,8 +55,12 @@ jobs:
           CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           SU_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
           SU_FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
+          # v0.1.0 -> 0.1.0. Sparkle compares CFBundleVersion, so this has to
+          # track the tag or no release is ever seen as newer than the last.
+          APP_VERSION: ${{ github.ref_name }}
         run: |
           cd menubar
+          export APP_VERSION="${APP_VERSION#v}"
           chmod +x build_app.sh make_dmg.sh
           ./make_dmg.sh release
 
@@ -109,8 +113,30 @@ jobs:
           cd menubar
           ASSETS="AirMouse.dmg"
           [ -f appcast.xml ] && ASSETS="$ASSETS appcast.xml"
+          # --prerelease until there is a Developer ID: Gatekeeper refuses the
+          # first launch of an unsigned build, and labelling that as a finished
+          # release sets an expectation the download does not meet.
+          PRERELEASE=""
+          [ -z "${{ secrets.MACOS_SIGN_IDENTITY }}" ] && PRERELEASE="--prerelease"
+
+          # Built in a file rather than inline: YAML's block scalar strips this
+          # indentation before the shell sees it, so the heredoc lands at column
+          # zero, and a multi-line string inline would end the scalar instead.
+          NOTES="$(mktemp)"
+          {
+            echo "SHA256 (AirMouse.dmg): ${{ steps.checksum.outputs.sha256 }}"
+            if [ -n "$PRERELEASE" ]; then
+              echo
+              echo "This build is **not signed with a Developer ID**. macOS refuses the"
+              echo "first launch with \"Air Mouse cannot be opened because the developer"
+              echo "cannot be verified\". To open it: right-click Air Mouse in Applications"
+              echo "and choose Open, then confirm. Double-clicking does not offer the option."
+            fi
+          } > "$NOTES"
+
           gh release create "${{ github.ref_name }}" \
             $ASSETS \
             --title "${{ github.ref_name }}" \
+            $PRERELEASE \
             --generate-notes \
-            --notes "SHA256 (AirMouse.dmg): ${{ steps.checksum.outputs.sha256 }}"
+            --notes-file "$NOTES"
