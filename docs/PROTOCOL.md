@@ -202,14 +202,23 @@ field. See ADR-0004 — gating on it once broke typing entirely.
 { "type": "focus_keyboard" }
 ```
 
-"A text field just took focus — arm the phone keyboard." The client cannot call
-`focus()` directly from a WebSocket handler (iOS Safari requires a user
-gesture), so it arms a flag and the **next touch is consumed** to open the
-keyboard.
+"A Mac text field just took focus." A **hint**, nothing more — same rules as
+`focus_state`.
 
-> Because that touch is swallowed, this message must only be sent on a genuine
-> tap into a text field — never on drag-release or double-click. Sending it too
-> eagerly makes the trackpad feel broken.
+A client must not consume a user's touch on the strength of this message. iOS
+Safari will not open the keyboard from a WebSocket handler (it is not a user
+gesture), so a client can only open the keyboard from inside a real touch
+event; this message just tells it that doing so would be useful.
+
+> **This message used to mean "arm the keyboard: swallow the next touch to open
+> it."** That did not work, and the approach was removed — see ADR-0008. It
+> raced the network (the message lands ~200ms after the tap, typically *after*
+> the second tap of a double-tap has already started) and, once armed, the
+> server had no way to take it back, so it fired on some later unrelated touch
+> and the keyboard appeared while the user was moving the cursor.
+>
+> The web client now opens the keyboard on an explicit double-tap, inside the
+> `touchend` gesture, using this and `focus_state` only as hints.
 
 ### `context`
 

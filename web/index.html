@@ -788,6 +788,11 @@
         let lastTouchTime = 0;
         let isMoving = false;
         let dragModeActivated = false;
+        // Double-tap and hold picks up without having to move first. Holding is the
+        // natural way to grab something, and requiring a 6px move meant a deliberate
+        // press-and-hold did nothing at all.
+        let dragHoldTimer = null;
+        const DRAG_HOLD_MS = 140;
         // Touch and hold → right click. Holding still previously did nothing in
         // trackpad mode, so this gesture was free; the two-finger tap stays.
         const LONG_PRESS_MS = 500;
@@ -813,7 +818,12 @@
         let isRightEdgeGesture = false;
         let edgeScrollDirection = null;
         let airmouseTouchCount = 0;
-        let keyboardPending = false; // Set when server signals a text field was focused
+        // The keyboard is opened by an explicit double-tap (see touchend), never by
+        // arming a flag that swallows whatever the user touches next. That older
+        // approach raced the network: the server's focus_keyboard lands ~210ms after
+        // the first tap, usually *after* the second tap of a double-tap has already
+        // begun, so the double-tap did nothing and the arming instead fired on some
+        // later, unrelated touch — the keyboard appearing while moving the cursor.
 
         // Scroll smoothing state (exponential moving average on velocity)
         let scrollVelX = 0;
@@ -997,9 +1007,12 @@
                         macFieldFocused = !!msg.focused;
                         updateSendButton();
                     } else if (msg.type === 'focus_keyboard') {
-                        // iOS Safari blocks focus() from WS handlers (not a user gesture).
-                        // Pre-arm: next touch on the surface will open the keyboard.
-                        keyboardPending = true;
+                        // iOS Safari blocks focus() from WS handlers (not a user gesture),
+                        // so this can only ever be a hint. It means "a Mac text field just
+                        // took focus"; double-tapping the surface is what actually opens
+                        // the keyboard, inside a real touch event.
+                        macFieldFocused = true;
+                        updateSendButton();
                         vibrate(15);
                     } else if (msg.type === 'auth_ok') {
                         authenticated = true;
@@ -1080,12 +1093,6 @@
             // If a text-field focus was signaled by the server, open keyboard on next touch.
             // Must NOT call e.preventDefault() here — iOS Safari won't open the keyboard
             // if the default touch behavior is cancelled before focus() fires.
-            if (keyboardPending) {
-                keyboardPending = false;
-                textInput.focus();
-                return; // consume this touch for keyboard only
-            }
-
             e.preventDefault();
 
             if (currentMode === 'trackpad') {
@@ -1130,6 +1137,16 @@
                         if (wasLastTouchTap && (now - lastTouchTime < 300)) {
                             dragModeActivated = true;
                             dragDownSent = false;
+                            // Hold after the second tap to pick up, without needing to move.
+                            clearTimeout(dragHoldTimer);
+                            dragHoldTimer = setTimeout(() => {
+                                dragHoldTimer = null;
+                                if (dragModeActivated && !dragDownSent) {
+                                    sendPacket({type: 'click', button: 'left', action: 'down'});
+                                    dragDownSent = true;
+                                    vibrate(15);
+                                }
+                            }, DRAG_HOLD_MS);
                         }
 
                         // Hold still to right click — but not when this touch is
@@ -1316,6 +1333,8 @@
                 }
 
                 cancelLongPress();
+                clearTimeout(dragHoldTimer);
+                dragHoldTimer = null;
 
                 if (dragModeActivated) {
                     if (dragDownSent) {
@@ -1324,6 +1343,15 @@
                     } else {
                         sendPacket({type: 'click', button: 'left', action: 'double_tap'});
                         vibrate([20, 20]);
+                        // Double-tap on a Mac text field opens the keyboard. touchend is a
+                        // real user gesture, so iOS allows focus() here — unlike from the
+                        // WebSocket handler. macFieldFocused comes from focus_state after
+                        // the first tap, and is only a hint: if it never arrives the
+                        // keyboard simply doesn't open, and nothing else is affected
+                        // (ADR-0004 — this must never gate input).
+                        if (macFieldFocused) {
+                            textInput.focus();
+                        }
                     }
                     dragModeActivated = false;
                     dragDownSent = false;
@@ -1395,6 +1423,49 @@
                 airmouseTouchCount = 0;
             }
         }, { passive: false });
+
+        // iOS cancels touches on interruption — the keyboard animating in, a system
+        // edge swipe, a notification, an incoming call. touchend never fires in that
+        // case, so without this the 'up' matching a drag's 'down' is never sent and the
+        // Mac is left with the button held down, dragging everything the cursor touches
+        // (ADR-0006). Releases the button and resets gesture state to match the server.
+        touchSurface.addEventListener('touchcancel', () => {
+            clearTimeout(dragHoldTimer);
+            dragHoldTimer = null;
+            cancelLongPress();
+
+            if (dragDownSent || isAirMouseDragging) {
+                sendPacket({type: 'click', button: 'left', action: 'up'});
+            }
+
+            dragModeActivated = false;
+            dragDownSent = false;
+            wasLastTouchTap = false;
+            isMoving = false;
+            isScrolling = false;
+            isEdgeScrolling = false;
+            isLeftEdgeGesture = false;
+            isRightEdgeGesture = false;
+            isAirMouseDragging = false;
+            isAirMouseScrolling = false;
+            airmouseTouchCount = 0;
+            scrollVelX = 0;
+            scrollVelY = 0;
+        }, { passive: false });
+
+        // Same reasoning for backgrounding the page mid-drag: no touch event is
+        // delivered at all, so release explicitly rather than leaving it held.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'hidden') return;
+            clearTimeout(dragHoldTimer);
+            dragHoldTimer = null;
+            if (dragDownSent || isAirMouseDragging) {
+                sendPacket({type: 'click', button: 'left', action: 'up'});
+            }
+            dragModeActivated = false;
+            dragDownSent = false;
+            isAirMouseDragging = false;
+        });
 
         // Keyboard shortcuts (Cmd+C, Cmd+Tab, etc.)
         document.querySelectorAll('.shortcut-btn').forEach((btn) => {
@@ -1893,12 +1964,16 @@
 
         function initCanvas() {
             const rect = bgCanvas.getBoundingClientRect();
+            // Reallocating the backing buffer and rebuilding the dot grid is the most
+            // expensive thing on this page, so skip it when the size is unchanged.
+            if (rect.width === canvasWidth && rect.height === canvasHeight) return;
+
             canvasWidth = rect.width;
             canvasHeight = rect.height;
             bgCanvas.width = Math.round(canvasWidth * window.devicePixelRatio);
             bgCanvas.height = Math.round(canvasHeight * window.devicePixelRatio);
             ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-            
+
             dots = [];
             for (let x = 0; x <= canvasWidth + SPACING; x += SPACING) {
                 for (let y = 0; y <= canvasHeight + SPACING; y += SPACING) {
@@ -1928,8 +2003,16 @@
         if (window.visualViewport) {
             // The scene is resized to the visual viewport, so the grid has to
             // be rebuilt when the keyboard opens or closes.
+            //
+            // Debounced, unlike the scene tracking above: visualViewport fires every
+            // frame of the keyboard animation (see ADR-0003), and rebuilding the canvas
+            // buffer and dot grid dozens of times in a row starves the main thread —
+            // which showed up as the trackpad going unresponsive while the keyboard
+            // animated. The grid only has to be right once the viewport settles.
+            let gridRebuildTimer = null;
             window.visualViewport.addEventListener('resize', () => {
-                requestAnimationFrame(initCanvas);
+                clearTimeout(gridRebuildTimer);
+                gridRebuildTimer = setTimeout(initCanvas, 150);
             });
         }
         initCanvas();

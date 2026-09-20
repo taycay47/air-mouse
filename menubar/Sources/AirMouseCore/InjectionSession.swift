@@ -128,13 +128,18 @@ public final class InjectionSession {
                     postMouseEvent(.leftMouseDown, cx, cy, button: .left)
                     Thread.sleep(forTimeInterval: 0.01)
                     postMouseEvent(.leftMouseUp, cx, cy, button: .left)
-                    // Auto-open phone keyboard if the click landed on a text field.
+                    // A tap is the only action that sets announceFocus, so it is the
+                    // only one that can emit focus_keyboard. That message is a hint —
+                    // "a Mac text field just took focus" — and nothing more: the client
+                    // opens the keyboard on an explicit double-tap, inside a real touch
+                    // event, and works fine if the hint never arrives (ADR-0004,
+                    // ADR-0008). It must never arm anything client-side.
                     trigger = .checkFocus(delaySeconds: 0.20, clipboardChanged: false, announceFocus: true)
                 case "double_tap":
                     postMouseEvent(.leftMouseDown, cx, cy, button: .left, clickCount: 2)
                     Thread.sleep(forTimeInterval: 0.01)
                     postMouseEvent(.leftMouseUp, cx, cy, button: .left, clickCount: 2)
-                    // Double-click selects a word.
+                    // Double-click selects a word. Never arms the keyboard (ADR-0004).
                     trigger = .checkFocus(delaySeconds: 0.20, clipboardChanged: false, announceFocus: false)
                 default:
                     break

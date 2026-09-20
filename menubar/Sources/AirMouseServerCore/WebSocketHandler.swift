@@ -15,6 +15,9 @@ final class WebSocketHandler: ChannelInboundHandler {
     private let session = InjectionSession()
     private var authenticated = false
     private var closeSent = false
+    /// Bumped per focus check so stale in-flight checks can be discarded rather
+    /// than emitting state that has since been superseded. Event-loop confined.
+    private var checkGeneration: UInt64 = 0
 
     init(auth: AuthState) {
         self.auth = auth
@@ -72,6 +75,11 @@ final class WebSocketHandler: ChannelInboundHandler {
             switch auth.attempt(token: token, pin: pin) {
             case .ok(let issuedToken):
                 authenticated = true
+                // A newly authenticated connection means any button still held from a
+                // previous one is stale — the gesture that pressed it is definitively
+                // over. Releasing here recovers automatically from a client that
+                // dropped mid-drag without sending its 'up' (ADR-0006).
+                releaseHeldButtons()
                 sendJSON(["type": "auth_ok", "token": issuedToken], context: context)
             case .failRateLimited:
                 sendJSON(["type": "auth_fail", "reason": "rate_limited"], context: context)
@@ -83,35 +91,60 @@ final class WebSocketHandler: ChannelInboundHandler {
 
         let trigger = session.handle(packet)
         if case .checkFocus(let delaySeconds, let clipboardChanged, let announceFocus) = trigger {
+            // Only the newest check is still meaningful: focus/selection have moved on.
+            // Without this, checks queue up behind each other on the serial AX queue and
+            // land late — arming focus_keyboard long after the tap, so the keyboard opens
+            // on some unrelated later touch (e.g. while moving the cursor).
+            checkGeneration &+= 1
             scheduleFocusCheck(
                 delaySeconds: delaySeconds, clipboardChanged: clipboardChanged,
-                announceFocus: announceFocus, context: context
+                announceFocus: announceFocus, context: context, generation: checkGeneration
             )
         }
+    }
+
+    /// True only if no newer focus check has been requested since this one.
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        generation == checkGeneration
     }
 
     // Ported from mouse_controller.py's _check_text_focus. The actual AX/clipboard
     // read happens off the event loop (see AirMouseCore.performFocusAndClipboardCheck) —
     // this only schedules the delay and sends the resulting state messages, never
     // gating or delaying any real control message (docs/adr/0004).
-    private func scheduleFocusCheck(delaySeconds: Double, clipboardChanged: Bool, announceFocus: Bool, context: ChannelHandlerContext) {
+    private func scheduleFocusCheck(delaySeconds: Double, clipboardChanged: Bool, announceFocus: Bool, context: ChannelHandlerContext, generation: UInt64) {
         let channel = context.channel
-        channel.eventLoop.scheduleTask(in: .milliseconds(Int64(delaySeconds * 1000))) {
+        let eventLoop = channel.eventLoop
+
+        eventLoop.scheduleTask(in: .milliseconds(Int64(delaySeconds * 1000))) { [weak self] in
+            guard let self, self.isCurrent(generation) else { return }
             performFocusAndClipboardCheck(clipboardChanged: clipboardChanged) { focus, hasClipboard in
-                sendJSONFrame(["type": "focus_state", "focused": focus.isTextField], channel: channel)
-                // focus_keyboard consumes the phone's next touch, so it must only be
-                // sent on a genuine tap — never drag-release or double-click (ADR-0004).
-                if focus.isTextField && announceFocus {
-                    sendJSONFrame(["type": "focus_keyboard"], channel: channel)
+                // Back to the event loop so the generation check isn't racing.
+                eventLoop.execute { [weak self] in
+                    guard let self, self.isCurrent(generation) else { return }
+                    emitFocusMessages(focus: focus, hasClipboard: hasClipboard, announceFocus: announceFocus, channel: channel)
                 }
-                sendJSONFrame(["type": "context", "hasSelection": focus.hasSelection, "hasClipboard": hasClipboard], channel: channel)
             }
         }
     }
 
+
     private func sendJSON(_ obj: [String: Any], context: ChannelHandlerContext) {
         sendJSONFrame(obj, channel: context.channel)
     }
+}
+
+// Emits the three advisory state messages in mouse_controller.py's order:
+// focus_state, then focus_keyboard (tap only), then context.
+private func emitFocusMessages(focus: FocusInfo, hasClipboard: Bool, announceFocus: Bool, channel: Channel) {
+    sendJSONFrame(["type": "focus_state", "focused": focus.isTextField], channel: channel)
+    // Advisory only: it reports that a text field took focus, and the client
+    // decides what to do with that. Sent on a genuine tap alone — on a
+    // drag-release or double-click the hint is meaningless (ADR-0004, ADR-0008).
+    if focus.isTextField && announceFocus {
+        sendJSONFrame(["type": "focus_keyboard"], channel: channel)
+    }
+    sendJSONFrame(["type": "context", "hasSelection": focus.hasSelection, "hasClipboard": hasClipboard], channel: channel)
 }
 
 // Free function so it's safely callable from the background queue that

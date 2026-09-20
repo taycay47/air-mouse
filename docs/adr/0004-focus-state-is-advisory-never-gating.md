@@ -35,7 +35,15 @@ Anything gated on it inherits that unreliability. A feature that degrades from
 - Backspace with the caret at position 0 is forwarded explicitly — the local
   field cannot shrink, so no `input` event fires, and without this you can only
   delete text you typed on the phone.
-- `focus_keyboard` is the one exception that consumes a user action (it swallows
-  the next touch to open the keyboard). Precisely because of that, it is only
-  sent on a genuine tap — never on drag-release or double-click, which made the
-  trackpad feel broken.
+- ~~`focus_keyboard` is the one exception that consumes a user action (it
+  swallows the next touch to open the keyboard). Precisely because of that, it
+  is only sent on a genuine tap — never on drag-release or double-click, which
+  made the trackpad feel broken.~~
+
+  **Superseded by ADR-0008.** There is no exception: nothing may consume a
+  user's touch on the strength of an Accessibility-derived message. Carving out
+  `focus_keyboard` was a mistake, and the "only on a genuine tap" guard was not
+  enough to make it safe — a tap that armed the flag with no second tap
+  following left it primed to fire on whatever the user touched next, so the
+  keyboard opened while they were moving the cursor. The keyboard is now opened
+  by an explicit double-tap on the client, inside a real touch event.

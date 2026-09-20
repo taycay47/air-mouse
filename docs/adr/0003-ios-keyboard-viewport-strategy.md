@@ -53,5 +53,13 @@ machinery that assumed otherwise was removed.
 
 - Any new fixed-position UI must live inside `#scene`, or it will not track the
   keyboard.
+- **`visualViewport` firing every frame cuts both ways.** Decision 3 relies on
+  it: cheap work (a transform and a height) *should* run per frame. Expensive
+  work must not. The dot grid was rebuilt from that same event — reallocating the
+  canvas backing buffer and regenerating every dot — so toggling the keyboard ran
+  dozens of full rebuilds back to back, starved the main thread, and made the
+  trackpad stop responding mid-animation. Expensive listeners on this event need
+  debouncing until the viewport settles; only the tracking transform belongs on
+  the per-frame path.
 - A native iOS client makes this entire ADR obsolete — real keyboard
   notifications, no viewport games.
