@@ -5,28 +5,42 @@ current proof of concept and something a stranger can install.
 
 ---
 
-## 1. Swift port of the server — **critical path**
+## 1. Swift port of the server — **done** (2026-09-01)
 
-See [ADR-0002](adr/0002-port-input-injection-from-python-to-swift.md).
+See [ADR-0002](adr/0002-port-input-injection-from-python-to-swift.md), which
+records where its own recommendations turned out to be wrong.
 
-- [ ] Injection layer as a standalone Swift CLI driven from stdin. Verify each
-      message type physically moves the cursor / types / scrolls **before**
-      anything else exists.
-- [ ] Accessibility layer (`focus_state`, `context`).
-- [ ] TLS + WebSocket + HTTP listener. Prefer Network framework
-      (`NWListener` / `NWProtocolTLS` / `NWProtocolWebSocket`) — Apple-native,
-      no SPM dependencies to vendor and notarize.
-- [ ] Conformance: **`web/index.html` runs unmodified against the Swift server.**
+- [x] Injection layer, verified message type by message type against the real
+      cursor before anything else existed (`AirMouseInjector` still exists as a
+      stdin-driven dev tool).
+- [x] Accessibility layer (`focus_state`, `context`, `focus_keyboard`).
+- [x] TLS + WebSocket + HTTP listener. **Not** Network framework — its TLS wants
+      a Keychain-backed `SecIdentity`, which forces a "wants to sign using key"
+      prompt on every start. swift-nio (`NIOSSL` + `NIOHTTP1` + `NIOWebSocket`)
+      loads the PEM directly, like Python did.
+- [x] Runs in-process inside `AirMouseBar`, not as a spawned child binary, so
+      Accessibility is one grant on the app itself.
+- [x] The web client runs against the Swift server.
 
-Rules for this phase:
+Two rules from this phase were kept, and one was dropped:
 
-- `docs/PROTOCOL.md` is the spec, not the Python source.
-- Do **not** edit `web/index.html`. It is the integration test.
-- Keep `mouse_controller.py` runnable as the reference until conformance passes.
+- `docs/PROTOCOL.md` is the spec, not the Python source. **Kept.**
+- Keep `mouse_controller.py` runnable as the reference. **Kept** — it is still
+  there and still runnable.
+- ~~Do not edit `web/index.html`.~~ **Dropped, deliberately.** Treating it as a
+  frozen integration test was right while proving the port, and it did its job:
+  the client working unmodified is what confirmed the wire protocol was correct.
+  But two bugs turned out to *live in the client* — a missing `touchcancel`
+  handler leaving the mouse button held (ADR-0006), and the keyboard-arming race
+  (ADR-0008) — and holding the file immovable meant hunting for server-side
+  workarounds to problems that had no server-side fix. A conformance test that
+  cannot be corrected stops being a test and becomes a constraint.
 
-Difficulty is uneven — roughly 60 % mechanical, 15 % needing real Swift C-interop
-knowledge, 25 % genuine design work in the server layer. Delegate accordingly;
-the server layer is not a translation task.
+Difficulty was uneven, roughly as predicted: the injection layer was mechanical
+and genuinely shorter in Swift, and the server layer was the design work. The
+unpredicted time went almost entirely into macOS platform behaviour — Keychain,
+TCC grants keyed to a signature that changes on every build, and which thread an
+Accessibility call is allowed to run on.
 
 ## 2. Self-contained, signed, notarized bundle
 
@@ -85,7 +99,8 @@ Only after the feature set stops moving.
   shows the warning (or fails silently) on every launch, which would move the
   native client up the list.
 - Is `switch_desktop` reproducible natively in Swift, or does the AppleScript
-  path have to stay? See the port note in `PROTOCOL.md`.
+  path have to stay? Still open — the port kept the AppleScript path rather than
+  gambling on it, and it works. See the port note in `PROTOCOL.md`.
 - Update channel for a non–App Store Mac app.
 
 ## Known rough edges
@@ -93,7 +108,7 @@ Only after the feature set stops moving.
 - Gesture-feedback toasts (`Drag active`, `Right Click`, `Double Click`,
   `Previous/Next Desktop`) still fire during normal use. The dot grid could
   carry these instead, as the green success pulse already does.
-- The `[AX] role=… selection=…` server log fires on every tap. Useful now,
-  log spam for production.
+- ~~The `[AX] role=… selection=…` server log fires on every tap.~~ Removed in
+  the Swift port.
 - The full-width input bar overlaps the bottom-edge horizontal-scroll strip
   (bottom 10 % of the touch surface).

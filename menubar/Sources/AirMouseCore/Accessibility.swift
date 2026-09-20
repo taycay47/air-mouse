@@ -56,7 +56,6 @@ private func checkTextFocus() -> FocusInfo {
     // Absent selection is treated as "no selection" (fail-closed) — not every
     // app exposes AXSelectedText.
     let hasSelection = !(selected?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-    logError("[AX] role=\(role ?? "nil") text=\(isText) selection=\(hasSelection)")
     return FocusInfo(isTextField: isText, hasSelection: hasSelection)
 }
 
