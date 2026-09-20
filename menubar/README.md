@@ -61,3 +61,23 @@ Two things worth knowing if input or the Copy/Paste pills stop working:
 `switch_desktop` additionally needs **Automation** (System Events), requested
 the first time it is used — it goes through AppleScript because Mission Control
 ignores synthetic modifier flags from `CGEventPost`.
+
+## Testing a cold install
+
+`./reset_install.sh` removes every trace of Air Mouse from the Mac — the
+bundle, the generated certificate and pairing tokens, preferences, caches, and
+the TCC Accessibility and Automation grants — so the next install from the
+`.dmg` exercises the real first-run path.
+
+    ./reset_install.sh --dry-run    # show what would go, change nothing
+    ./reset_install.sh              # confirm, then remove
+    ./reset_install.sh --yes        # no prompt
+
+Dragging the app to the Trash is not equivalent. The Accessibility grant lives
+in TCC rather than in the bundle, preferences are cached by `cfprefsd` and get
+written back out after the plist is deleted, and `paired_devices.json` lets the
+phone skip PIN entry — so pairing appears to work without having been tested.
+
+The phone holds state the Mac cannot clear: delete the Home Screen icon and
+clear Safari's website data for the Mac's hostname, which is what drops the
+saved token and the accepted certificate exception.
