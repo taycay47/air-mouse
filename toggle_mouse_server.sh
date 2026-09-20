@@ -7,7 +7,6 @@
 # @raycast.packageName Mouse Controller
 
 # Optional parameters:
-# @raycast.icon 🖱️
 
 # Resolve the repo directory from this script's own location so it keeps
 # working regardless of where the repo is checked out or what cwd Raycast

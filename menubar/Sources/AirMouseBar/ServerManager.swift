@@ -1,94 +1,80 @@
 import Foundation
+import AirMouseServerCore
 
-/// Launches and supervises the existing Python `mouse_controller.py` server as a
-/// child process, and parses its startup banner for the pairing PIN and URL.
+/// Owns the AirMouseServerCore server in-process (not a spawned child binary).
 ///
-/// This is a v1 wrapper, not a native reimplementation: the Swift app owns the
-/// menu bar UI and process lifecycle, but mouse/keyboard injection still happens
-/// in the Python/CoreGraphics server. Porting that to native Swift/CoreGraphics
-/// calls is future work — see menubar/README.md.
+/// This replaces both the earlier Python `mouse_controller.py` child process and
+/// an earlier Swift attempt that spawned a separate `AirMouseServer` binary — see
+/// docs/adr/0002-port-input-injection-from-python-to-swift.md. Both of those
+/// shapes reintroduce the exact problem ADR-0002 set out to fix: Accessibility
+/// permission ends up granted to a separate, unstable child binary instead of
+/// this app itself. Running the server in-process means one binary, one grant.
 final class ServerManager: ObservableObject {
     @Published var isRunning = false
     @Published var pin: String?
     @Published var url: String?
     @Published var statusMessage = "Stopped"
 
-    private var process: Process?
-    private var outputPipe: Pipe?
+    private let runner = AirMouseServerRunner()
+    private let port = 8443
 
-    /// Repo root, resolved relative to this source file's own location at compile
-    /// time (`#filePath`) rather than a hardcoded path — consistent with how
-    /// toggle_mouse_server.sh and the Raycast extension locate the checkout.
-    private var repoRoot: URL {
-        URL(fileURLWithPath: #filePath)
+    /// Where the web client is served from.
+    ///
+    /// In a shipped `.app` this is `Contents/Resources/web` (build_app.sh copies it
+    /// in). The `#filePath` fallback is for development only — running from the
+    /// checkout via `swift run`, where there is no bundle to read from.
+    ///
+    /// A shipped build must never depend on `#filePath`: it is the *compile-time*
+    /// source path, so the binary would look for the developer's own home
+    /// directory and serve 404s everywhere else. That was ADR-0002's first
+    /// listed blocker.
+    private var webRoot: URL {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("web", isDirectory: true),
+           FileManager.default.fileExists(atPath: bundled.appendingPathComponent("index.html").path) {
+            return bundled
+        }
+        return URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent() // ServerManager.swift -> AirMouseBar/
             .deletingLastPathComponent() // AirMouseBar/ -> Sources/
             .deletingLastPathComponent() // Sources/ -> menubar/
             .deletingLastPathComponent() // menubar/ -> repo root
+            .appendingPathComponent("web", isDirectory: true)
     }
 
-    private var pythonPath: URL { repoRoot.appendingPathComponent(".venv/bin/python3") }
-    private var scriptPath: URL { repoRoot.appendingPathComponent("mouse_controller.py") }
-
     func start() {
-        guard process == nil else { return }
-        guard FileManager.default.fileExists(atPath: pythonPath.path) else {
-            statusMessage = "venv not found — run setup in Terminal first"
-            return
-        }
+        guard !isRunning else { return }
+        statusMessage = "Starting…"
 
-        let proc = Process()
-        proc.executableURL = pythonPath
-        proc.arguments = [scriptPath.path]
-        proc.currentDirectoryURL = repoRoot
+        let runner = self.runner
+        let port = self.port
+        let webRoot = self.webRoot
 
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = pipe
-        outputPipe = pipe
-
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            DispatchQueue.main.async { self?.parse(output: text) }
-        }
-
-        proc.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.isRunning = false
-                self?.statusMessage = "Stopped"
-                self?.process = nil
+        // The initial bind briefly blocks the calling thread — run it off the
+        // main thread so it can't stall the UI. The server itself then runs on
+        // its own event loop thread regardless of which thread started it.
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let appSupportDir = try appSupportDirectory()
+                let info = try runner.start(port: port, webRoot: webRoot, appSupportDir: appSupportDir)
+                DispatchQueue.main.async { [weak self] in
+                    self?.pin = info.pin
+                    self?.url = info.url
+                    self?.isRunning = true
+                    self?.statusMessage = "Running"
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.statusMessage = "Failed to start: \(error)"
+                }
             }
-        }
-
-        do {
-            try proc.run()
-            process = proc
-            isRunning = true
-            statusMessage = "Starting…"
-        } catch {
-            statusMessage = "Failed to start: \(error.localizedDescription)"
         }
     }
 
     func stop() {
-        outputPipe?.fileHandleForReading.readabilityHandler = nil
-        process?.terminate()
-        process = nil
-        outputPipe = nil
+        runner.stop()
         isRunning = false
         pin = nil
         url = nil
         statusMessage = "Stopped"
-    }
-
-    private func parse(output: String) {
-        if let pinRange = output.range(of: #"PAIRING PIN:\s*(\d{4,6})"#, options: .regularExpression) {
-            pin = String(output[pinRange]).split(separator: ":").last?.trimmingCharacters(in: .whitespaces)
-        }
-        if let urlRange = output.range(of: #"https://[^\s]+"#, options: .regularExpression) {
-            url = String(output[urlRange])
-            statusMessage = "Running"
-        }
     }
 }

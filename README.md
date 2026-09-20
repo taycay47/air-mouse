@@ -19,6 +19,10 @@ resulting mouse, keyboard, and scroll events via CoreGraphics.
   as the menu bar app, for people who prefer Raycast.
 - **`osc_receiver.py`** — a standalone OSC telemetry receiver, useful for
   debugging phone sensor apps independently of the main server.
+- **`docs/`** — protocol specification, architecture decision records, roadmap,
+  and the intended onboarding flow. Start at [`docs/README.md`](docs/README.md);
+  read [`docs/PROTOCOL.md`](docs/PROTOCOL.md) before changing either end of the
+  wire.
 
 ## Setup
 

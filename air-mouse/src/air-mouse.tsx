@@ -317,7 +317,7 @@ export default function Command() {
   if (setupError) {
     return (
       <Detail
-        markdown={`# ⚠️ Setup Needed\n\n${setupError}\n\nOpen this extension's preferences (\`Cmd + Shift + ,\`) and set **Air Mouse Server Directory**.`}
+        markdown={`# Setup Needed\n\n${setupError}\n\nOpen this extension's preferences (\`Cmd + Shift + ,\`) and set **Air Mouse Server Directory**.`}
       />
     );
   }
@@ -330,7 +330,7 @@ export default function Command() {
     return (
       <Detail
         markdown={`
-# 🖱️ Mac Remote Controller
+# Mac Remote Controller
 
 The background server is currently **stopped**.
 
@@ -350,7 +350,7 @@ Start the server using the action panel (\`Cmd + Enter\`) to display the pairing
       {interfaces.map((item, index) => {
         const qr = qrMap[item.url];
         const md = `
-# 🖱️ Connection Channel: ${item.name}
+# Connection Channel: ${item.name}
 
 ${pin ? `### Pairing PIN: \`${pin}\`\nEnter this on the phone the first time it connects.\n\n` : ""}Scan this QR code with your iPhone to pair using this interface:
 
@@ -363,7 +363,7 @@ ${qr ? `![Pairing QR Code](${qr})` : "_Generating QR code..._"}
 ### Channel Info
 ${item.description}
 
-### ⚠️ One-Time Setup in Safari
+### One-Time Setup in Safari
 Because we use a self-signed SSL certificate:
 1. Open the camera, tap the link to load in Safari.
 2. Tap **Show Details** at the bottom of the private connection warning page.

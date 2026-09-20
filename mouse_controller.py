@@ -9,6 +9,7 @@ import json
 import asyncio
 import secrets
 import subprocess
+import atexit
 
 # Import third-party libraries installed in the venv
 try:
@@ -83,6 +84,10 @@ core_foundation.CFStringCreateWithCString.restype = ctypes.c_void_p
 
 core_foundation.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
 core_foundation.CFStringGetCString.restype = ctypes.c_bool
+core_foundation.CFGetTypeID.argtypes = [ctypes.c_void_p]
+core_foundation.CFGetTypeID.restype = ctypes.c_ulong
+core_foundation.CFStringGetTypeID.argtypes = []
+core_foundation.CFStringGetTypeID.restype = ctypes.c_ulong
 
 kCGMouseEventClickState = 1
 kCGEventFlagMaskShift = 0x20000
@@ -183,9 +188,61 @@ def _record_auth_failure():
 # ----------------------------------------------------
 # Accessibility: detect if focused element is a text field
 # ----------------------------------------------------
-async def _check_text_focus(websocket):
-    """Wait briefly after a click, then notify the client if focus is on a text field."""
-    await asyncio.sleep(0.20)
+def _copy_ax_string(element, attr_name, max_len=256):
+    """Read a CFString AX attribute off an element. Returns bytes, or None.
+
+    The type check is not optional: AX attributes can come back as any CF type
+    (AXSelectedText in particular), and handing a non-string to
+    CFStringGetCString is undefined behaviour that can take the process down.
+    """
+    attr = core_foundation.CFStringCreateWithCString(None, attr_name, kCFStringEncodingUTF8)
+    ref = ctypes.c_void_p()
+    err = core_graphics.AXUIElementCopyAttributeValue(element, attr, ctypes.byref(ref))
+    core_foundation.CFRelease(attr)
+    if err != 0 or not ref.value:
+        return None
+    try:
+        if core_foundation.CFGetTypeID(ref.value) != core_foundation.CFStringGetTypeID():
+            return None
+        buf = ctypes.create_string_buffer(max_len)
+        ok = core_foundation.CFStringGetCString(ref.value, buf, max_len, kCFStringEncodingUTF8)
+        if not ok:
+            return None
+        return buf.raw.rstrip(b'\x00')
+    finally:
+        core_foundation.CFRelease(ref.value)
+
+
+_clipboard_cache = (0.0, False)      # (checked_at, has_text)
+_CLIPBOARD_TTL = 3.0
+
+
+def _clipboard_has_text(force=False):
+    """True if the pasteboard holds non-empty text.
+
+    Cached: this runs after every tap, and spawning pbpaste that often would
+    add subprocess latency to the click path for no benefit.
+    """
+    global _clipboard_cache
+    checked_at, cached = _clipboard_cache
+    now = time.monotonic()
+    if not force and now - checked_at < _CLIPBOARD_TTL:
+        return cached
+    try:
+        out = subprocess.run(["pbpaste"], capture_output=True, timeout=1.0)
+        cached = bool(out.stdout.strip())
+    except Exception:
+        cached = False
+    _clipboard_cache = (now, cached)
+    return cached
+
+
+async def _check_text_focus(websocket, delay=0.20, clipboard_changed=False,
+                            announce_focus=True):
+    """After a click or drag, tell the client what the focused element is doing:
+    whether it is a text field (drives the phone keyboard) and whether it has a
+    selection (drives the contextual Copy pill)."""
+    await asyncio.sleep(delay)
     # Check Accessibility permission first
     try:
         ax_trusted = core_graphics.AXIsProcessTrusted()
@@ -195,6 +252,7 @@ async def _check_text_focus(websocket):
         print("[AX] Accessibility permission not granted — cannot detect text field focus.")
         return
     role = None
+    selected = None
     try:
         sys_elem = core_graphics.AXUIElementCreateSystemWide()
         if sys_elem:
@@ -204,25 +262,34 @@ async def _check_text_focus(websocket):
             core_foundation.CFRelease(attr_focused)
             core_foundation.CFRelease(sys_elem)
             if err == 0 and focused.value:
-                attr_role = core_foundation.CFStringCreateWithCString(None, b"AXRole", kCFStringEncodingUTF8)
-                role_ref = ctypes.c_void_p()
-                err2 = core_graphics.AXUIElementCopyAttributeValue(focused.value, attr_role, ctypes.byref(role_ref))
-                core_foundation.CFRelease(attr_role)
+                role = _copy_ax_string(focused.value, b"AXRole", 128)
+                # Not every app exposes this. Absent means "unknown", which we
+                # deliberately treat as "no selection" so the Copy pill never
+                # appears when there is nothing to copy.
+                selected = _copy_ax_string(focused.value, b"AXSelectedText")
                 core_foundation.CFRelease(focused.value)
-                if err2 == 0 and role_ref.value:
-                    buf = ctypes.create_string_buffer(128)
-                    core_foundation.CFStringGetCString(role_ref.value, buf, 128, kCFStringEncodingUTF8)
-                    core_foundation.CFRelease(role_ref.value)
-                    role = buf.raw.rstrip(b'\x00')
     except Exception as ex:
         print(f"[AX] Exception during focus check: {ex}")
-    print(f"[AX] Focused element role after click: {role}")
-    if role in _TEXT_ROLES:
-        try:
+
+    is_text = role in _TEXT_ROLES
+    has_selection = bool(selected and selected.strip())
+    print(f"[AX] role={role} text={is_text} selection={has_selection}")
+    try:
+        # Report focus BOTH ways: the client holds typed text back rather than
+        # firing it into the void when no Mac text field has focus.
+        await websocket.send(json.dumps({"type": "focus_state", "focused": is_text}))
+        # focus_keyboard arms the phone to swallow its next touch in order to
+        # open the keyboard. Only a plain tap should do that — firing it after
+        # a drag or a copy would eat the touch the user makes next.
+        if is_text and announce_focus:
             await websocket.send(json.dumps({"type": "focus_keyboard"}))
-            print("[AX] Sent focus_keyboard to client")
-        except Exception as ex:
-            print(f"[AX] Failed to send: {ex}")
+        await websocket.send(json.dumps({
+            "type": "context",
+            "hasSelection": has_selection,
+            "hasClipboard": _clipboard_has_text(force=clipboard_changed),
+        }))
+    except Exception as ex:
+        print(f"[AX] Failed to send: {ex}")
 
 # ----------------------------------------------------
 # Device Actions Wrappers
@@ -490,6 +557,24 @@ async def _run_osascript(script):
     stdout, stderr = await proc.communicate()
     return proc.returncode, stderr.decode(errors='replace')
 
+def _release_all_buttons():
+    """Release any held mouse button. Registered atexit because a crash would
+    otherwise leave the Mac with a button stuck down, which makes the pointer
+    drag across everything it touches."""
+    try:
+        if is_left_down:
+            cx, cy = get_mouse_position()
+            post_mouse_event(kCGEventLeftMouseUp, cx, cy, kCGMouseButtonLeft)
+        if is_right_down:
+            cx, cy = get_mouse_position()
+            post_mouse_event(kCGEventRightMouseUp, cx, cy, kCGMouseButtonRight)
+    except Exception:
+        pass
+
+
+atexit.register(_release_all_buttons)
+
+
 async def handle_ws_client(websocket):
     """Process incoming WebSocket packets containing telemetry & inputs."""
     global is_left_down, is_right_down
@@ -632,8 +717,13 @@ async def handle_ws_client(websocket):
                             is_left_down = True
                             post_mouse_event(kCGEventLeftMouseDown, cx, cy, kCGMouseButtonLeft)
                         elif action == 'up':
+                            was_dragging = is_left_down
                             is_left_down = False
                             post_mouse_event(kCGEventLeftMouseUp, cx, cy, kCGMouseButtonLeft)
+                            # Releasing a drag is how text gets selected.
+                            if was_dragging:
+                                asyncio.create_task(_check_text_focus(
+                                    websocket, announce_focus=False))
                         elif action == 'tap':
                             post_mouse_event(kCGEventLeftMouseDown, cx, cy, kCGMouseButtonLeft)
                             await asyncio.sleep(0.01)
@@ -644,6 +734,9 @@ async def handle_ws_client(websocket):
                             post_mouse_event(kCGEventLeftMouseDown, cx, cy, kCGMouseButtonLeft, click_count=2)
                             await asyncio.sleep(0.01)
                             post_mouse_event(kCGEventLeftMouseUp, cx, cy, kCGMouseButtonLeft, click_count=2)
+                            # Double-click selects a word.
+                            asyncio.create_task(_check_text_focus(
+                                websocket, announce_focus=False))
 
                     elif button == 'right':
                         if action == 'down':
@@ -679,6 +772,12 @@ async def handle_ws_client(websocket):
                             press_key_combo(keycode, modifiers)
                         else:
                             press_key(keycode)
+                        # ⌘C / ⌘V / ⌘A change the selection or the clipboard.
+                        if code in ('c', 'v', 'x', 'a') and 'cmd' in modifiers:
+                            asyncio.create_task(_check_text_focus(
+                                websocket, delay=0.12,
+                                clipboard_changed=code in ('c', 'x'),
+                                announce_focus=False))
 
                 elif msg_type == 'switch_desktop':
                     # Use osascript / System Events to send Control+Arrow.
@@ -696,20 +795,6 @@ async def handle_ws_client(websocket):
                         print(f"  → Enable 'System Events' for Terminal (or whichever app launched this server)")
                     else:
                         print(f"[Desktop] Switch {direction} OK")
-
-                elif msg_type == 'zoom':
-                    # Toggle / adjust macOS built-in Accessibility Zoom via keyboard shortcuts:
-                    #   Toggle  : ⌥⌘8  (key code 28)
-                    #   Zoom In : ⌥⌘0  (key code 29)
-                    #   Zoom Out: ⌥⌘-  (key code 27)
-                    # Requires "Use keyboard shortcuts to zoom" enabled in
-                    # System Settings → Accessibility → Zoom.
-                    action = packet.get('action', 'toggle')
-                    zoom_keycodes = {'toggle': 28, 'in': 29, 'out': 27}
-                    kc = zoom_keycodes.get(action)
-                    if kc is not None:
-                        script = f'tell application "System Events" to key code {kc} using {{command down, option down}}'
-                        await _run_osascript(script)
 
                 elif msg_type == 'calibrate':
                     # Reset air mouse vectors
