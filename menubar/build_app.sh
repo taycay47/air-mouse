@@ -36,8 +36,11 @@ rm -rf "$APP_DIR"
 mkdir -p "$CONTENTS_DIR/MacOS" "$CONTENTS_DIR/Resources"
 cp "$BIN_PATH" "$CONTENTS_DIR/MacOS/AirMouseBar"
 
-# The web client, served over HTTPS to the phone.
+# The web client, served over HTTPS to the phone. Build tooling that happens to
+# live in web/ is excluded — everything copied here is reachable over HTTP, and
+# the icon generator is not part of the client.
 cp -R "$REPO_ROOT/web" "$CONTENTS_DIR/Resources/web"
+rm -f "$CONTENTS_DIR/Resources/web/"*.swift
 
 # The uninstaller, so the app's "Uninstall…" button and the terminal path run
 # exactly the same script rather than two drifting definitions of "installed".
