@@ -4,7 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="description" content="Minimal mobile trackpad and air mouse controller for macOS.">
-    <title>Mac Remote Controller</title>
+    <title>Air Mouse</title>
+
+    <!-- Home-screen install. iOS ignores most of the manifest but does read the
+         apple-* meta tags, so both are needed: the manifest for Android/Chrome,
+         the meta tags for iOS standalone mode.
+         black-translucent lets the surface run under the status bar, which is
+         what viewport-fit=cover above is for. -->
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="theme-color" content="#000000">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Air Mouse">
+    <link rel="apple-touch-icon" href="icons/icon-180.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
     <script src="vendor/motion.js"></script>
     <style>
         :root {
@@ -346,6 +360,101 @@
             width: 84%;
             max-width: 300px;
             text-align: center;
+        }
+
+        /* Blocking notice for a condition the phone cannot fix by itself —
+           currently only a revoked Accessibility grant, which is otherwise
+           completely silent: everything connects and nothing moves. Sits above
+           the surface but does not cover it, so the user can still see the app
+           respond to their touches while being told why the Mac does not. */
+        .banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 14px;
+            background: rgba(40, 12, 10, 0.86);
+            backdrop-filter: blur(var(--blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+            border-bottom: 0.5px solid rgba(255, 69, 58, 0.45);
+            transform: translateY(-100%);
+            transition: transform 0.45s var(--ease);
+            z-index: 350;
+            pointer-events: none;
+        }
+
+        .banner.show { transform: translateY(0); }
+
+        .banner h5 {
+            font-size: 14px;
+            font-weight: 600;
+            color: rgb(255, 138, 128);
+            margin-bottom: 3px;
+        }
+
+        .banner p {
+            font-size: 12.5px;
+            line-height: 1.4;
+            color: rgba(255, 190, 184, 0.78);
+        }
+
+        /* Add-to-Home-Screen coaching. Without it users re-scan the QR code
+           forever, never discovering that this can be an icon. Shown once, after
+           pairing succeeds, and never again once dismissed. */
+        .a2hs {
+            position: fixed;
+            left: 12px;
+            right: 12px;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+            background: var(--surface-raised);
+            backdrop-filter: blur(var(--blur)) saturate(180%);
+            -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+            border: 0.5px solid var(--hairline);
+            border-radius: var(--r-lg);
+            padding: 16px 16px 12px;
+            opacity: 0;
+            transform: translateY(14px);
+            pointer-events: none;
+            transition: opacity 0.45s var(--ease), transform 0.45s var(--ease);
+            z-index: 320;
+        }
+
+        .a2hs.show {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .a2hs h5 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .a2hs p {
+            font-size: 13px;
+            line-height: 1.45;
+            color: var(--text-2);
+        }
+
+        .a2hs .share-glyph {
+            display: inline-block;
+            vertical-align: -3px;
+            margin: 0 2px;
+        }
+
+        .a2hs-dismiss {
+            display: block;
+            width: 100%;
+            margin-top: 12px;
+            padding: 9px;
+            background: var(--fill);
+            border: none;
+            border-radius: var(--r-sm);
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 500;
+            font-family: inherit;
         }
 
         .pairing-content h4 {
@@ -703,11 +812,30 @@
         <div class="pairing-overlay" id="pairing-overlay">
             <div class="pairing-content">
                 <h4>Enter Pairing PIN</h4>
-                <p>Shown in the Mac's terminal window</p>
+                <p>Shown in the Air Mouse window on your Mac</p>
                 <input type="text" id="pairing-pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="000000">
                 <button class="sheet-action prominent" id="btn-pairing-submit" style="margin-top:16px;">Pair</button>
                 <div id="pairing-error"></div>
             </div>
+        </div>
+
+        <!-- Accessibility revoked: the one failure the phone cannot diagnose itself -->
+        <div class="banner" id="permission-banner">
+            <h5>Air Mouse can't control your Mac</h5>
+            <p>Accessibility permission was turned off. On the Mac, open System&nbsp;Settings &rsaquo; Privacy&nbsp;&amp;&nbsp;Security &rsaquo; Accessibility and switch Air&nbsp;Mouse back on.</p>
+        </div>
+
+        <!-- Add to Home Screen coaching -->
+        <div class="a2hs" id="a2hs">
+            <h5>Add this to your Home Screen</h5>
+            <p>Tap
+                <svg class="share-glyph" width="15" height="19" viewBox="0 0 15 19" fill="none" aria-hidden="true">
+                    <path d="M7.5 1.2v10.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <path d="M4.3 4.2 7.5 1l3.2 3.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M3.4 7.6H2.2v9.6h10.6V7.6h-1.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                in Safari's toolbar, then <strong>Add to Home Screen</strong>. It opens full screen, and you won't need the QR code again.</p>
+            <button class="a2hs-dismiss" id="btn-a2hs-dismiss">Got it</button>
         </div>
 
         <!-- Toast Notification -->
@@ -722,6 +850,9 @@
         let sessionToken = localStorage.getItem('session-token');
 
         // Pairing UI
+        const permissionBanner = document.getElementById('permission-banner');
+        const a2hsPanel = document.getElementById('a2hs');
+        const btnA2hsDismiss = document.getElementById('btn-a2hs-dismiss');
         const pairingOverlay = document.getElementById('pairing-overlay');
         const pairingPinInput = document.getElementById('pairing-pin-input');
         const btnPairingSubmit = document.getElementById('btn-pairing-submit');
@@ -968,6 +1099,41 @@
             }, 2000);
         }
 
+        // ── Accessibility state ──────────────────────────────────────────
+        // Advisory, like every other server-sent state: if the message never
+        // arrives the client behaves exactly as before (docs/PROTOCOL.md).
+        function setPermissionOK(ok) {
+            permissionBanner.classList.toggle('show', !ok);
+        }
+
+        // ── Add to Home Screen ───────────────────────────────────────────
+        // Only worth showing where it is actually possible and not already done.
+        // iPadOS 13+ reports a Macintosh user agent, hence the touch-point check.
+        function canAddToHomeScreen() {
+            if (localStorage.getItem('a2hs-dismissed')) return false;
+            // Already installed: iOS sets navigator.standalone, others report
+            // the display-mode the manifest asked for.
+            if (window.navigator.standalone === true) return false;
+            if (window.matchMedia('(display-mode: standalone)').matches) return false;
+            const ua = navigator.userAgent;
+            const isIOS = /iPad|iPhone|iPod/.test(ua)
+                || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+            return isIOS;
+        }
+
+        function maybeShowAddToHomeScreen() {
+            if (!canAddToHomeScreen()) return;
+            // After the pairing overlay has finished animating out, so the two
+            // panels never overlap.
+            setTimeout(() => a2hsPanel.classList.add('show'), 900);
+        }
+
+        btnA2hsDismiss.addEventListener('click', () => {
+            a2hsPanel.classList.remove('show');
+            localStorage.setItem('a2hs-dismissed', '1');
+            vibrate(10);
+        });
+
         // Setup Secure WebSocket connection
         function connectWS() {
             const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -991,6 +1157,9 @@
             ws.onclose = () => {
                 setOnline(false);
                 authenticated = false;
+                // The banner describes live server state; without a server there
+                // is none, and the red offline tint already says that much.
+                setPermissionOK(true);
                 setTimeout(connectWS, 3000);
             };
 
@@ -1014,6 +1183,8 @@
                         macFieldFocused = true;
                         updateSendButton();
                         vibrate(15);
+                    } else if (msg.type === 'permission') {
+                        setPermissionOK(msg.accessibility !== false);
                     } else if (msg.type === 'auth_ok') {
                         authenticated = true;
                         sessionToken = msg.token;
@@ -1021,6 +1192,7 @@
                         hidePairingOverlay();
                         pulseGrid(PULSE_SUCCESS);
                         vibrate(20);
+                        maybeShowAddToHomeScreen();
                     } else if (msg.type === 'auth_fail') {
                         authenticated = false;
                         if (msg.reason === 'rate_limited') {
@@ -1028,7 +1200,7 @@
                         } else {
                             localStorage.removeItem('session-token');
                             sessionToken = null;
-                            pairingError.textContent = 'Incorrect PIN. Check the Mac terminal and try again.';
+                            pairingError.textContent = 'Incorrect PIN. Check the Air Mouse window on your Mac.';
                         }
                         showPairingOverlay();
                     }

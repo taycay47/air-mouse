@@ -7,6 +7,15 @@ import ApplicationServices
 // result here as advisory only, and must never let a check delay or block
 // sending real input.
 
+/// Whether this process currently holds the Accessibility grant.
+///
+/// Exposed because losing it is otherwise a completely silent failure: the
+/// server still accepts connections, the phone still pairs, every message is
+/// still accepted — and nothing moves. The client is told so it can say so.
+public func hasAccessibilityPermission() -> Bool {
+    AXIsProcessTrusted()
+}
+
 public struct FocusInfo {
     public let isTextField: Bool
     public let hasSelection: Bool

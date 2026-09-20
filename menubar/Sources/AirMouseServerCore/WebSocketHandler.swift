@@ -18,6 +18,10 @@ final class WebSocketHandler: ChannelInboundHandler {
     /// Bumped per focus check so stale in-flight checks can be discarded rather
     /// than emitting state that has since been superseded. Event-loop confined.
     private var checkGeneration: UInt64 = 0
+    /// Last Accessibility state sent to this client, so only changes go on the
+    /// wire. nil until the first report.
+    private var lastReportedPermission: Bool?
+    private var permissionTimer: RepeatedTask?
 
     init(auth: AuthState) {
         self.auth = auth
@@ -27,6 +31,8 @@ final class WebSocketHandler: ChannelInboundHandler {
     // mouse_controller.py's handle_ws_client `finally` block — this runs
     // regardless of which connection actually set the flags (see AirMouseCore).
     func channelInactive(context: ChannelHandlerContext) {
+        permissionTimer?.cancel()
+        permissionTimer = nil
         releaseHeldButtons()
         context.fireChannelInactive()
     }
@@ -81,6 +87,7 @@ final class WebSocketHandler: ChannelInboundHandler {
                 // dropped mid-drag without sending its 'up' (ADR-0006).
                 releaseHeldButtons()
                 sendJSON(["type": "auth_ok", "token": issuedToken], context: context)
+                startPermissionReporting(context: context)
             case .failRateLimited:
                 sendJSON(["type": "auth_fail", "reason": "rate_limited"], context: context)
             case .failInvalid:
@@ -128,6 +135,32 @@ final class WebSocketHandler: ChannelInboundHandler {
         }
     }
 
+
+    /// Reports the Accessibility grant, then watches it for the life of the
+    /// connection.
+    ///
+    /// Polled rather than pushed because macOS provides no notification when a
+    /// grant is revoked, and revocation is invisible from the client's side —
+    /// the socket stays up and every message is still accepted. 2s is well
+    /// inside the time it takes a user to switch back from System Settings and
+    /// wonder why nothing works.
+    private func startPermissionReporting(context: ChannelHandlerContext) {
+        let channel = context.channel
+        reportPermissionIfChanged(channel: channel)
+        permissionTimer?.cancel()
+        permissionTimer = channel.eventLoop.scheduleRepeatedTask(
+            initialDelay: .seconds(2), delay: .seconds(2)
+        ) { [weak self] _ in
+            self?.reportPermissionIfChanged(channel: channel)
+        }
+    }
+
+    private func reportPermissionIfChanged(channel: Channel) {
+        let granted = hasAccessibilityPermission()
+        guard granted != lastReportedPermission else { return }
+        lastReportedPermission = granted
+        sendJSONFrame(["type": "permission", "accessibility": granted], channel: channel)
+    }
 
     private func sendJSON(_ obj: [String: Any], context: ChannelHandlerContext) {
         sendJSONFrame(obj, channel: context.channel)

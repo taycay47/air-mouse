@@ -236,6 +236,28 @@ Never polled — see ADR-0005.
 
 Unknown state is reported as `false`, never omitted. See ADR-0005 on fail-closed.
 
+### `permission`
+
+```json
+{ "type": "permission", "accessibility": true }
+```
+
+Whether the server currently holds the macOS Accessibility grant.
+
+Sent once immediately after `auth_ok`, then again only when the value changes.
+Polled server-side (2s) because macOS gives no notification when a grant is
+revoked.
+
+This one is advisory in the same sense as the others — a client that ignores it
+behaves exactly as it did before — but it is the only state message that
+reports a condition the user *must* act on. Losing the grant is otherwise
+completely invisible from the phone: the socket stays up, pairing succeeds,
+every control message is accepted and acknowledged, and the cursor does not
+move. The client shows a banner naming the pane to re-enable it in.
+
+Clients must treat a missing `accessibility` field as `true`, so that a server
+too old to send this message is not reported as broken.
+
 ---
 
 ## Static file serving

@@ -61,15 +61,29 @@ Accessibility call is allowed to run on.
 - [ ] Automation permission for `switch_desktop`, requested only when first used.
 - [ ] Large QR + PIN once permissions are granted.
 
-## 4. Web client polish
+## 4. Web client polish / PWA
 
-- [ ] Add-to-Home-Screen coaching, with a picture of the Share icon. Without
-      this, users re-scan a QR code forever.
+- [x] **A certificate that actually matches the URL.** The cert was
+      `CN=localhost` with no subjectAltName, served at `https://<host>.local`.
+      Safari has ignored CN for hostname matching since iOS 13, so this was not
+      a cosmetic warning — the cert could not be matched at all, and the "visit
+      this website anyway" escape hatch is not reliably offered for it. Now
+      carries SANs for the `.local` name, `localhost`, and every non-loopback
+      IPv4 address, and regenerates when the machine's name or addresses change.
+- [x] PWA manifest + icons (`web/make_icons.swift` regenerates them from the
+      same SF Symbol as the menu bar item).
+- [x] Add-to-Home-Screen coaching, with the Share glyph. Shown once after
+      pairing succeeds, and only where it is possible and not already installed.
+- [x] **Accessibility revoked** — was silent, which is the worst failure the app
+      has: everything connects, every message is accepted, and nothing moves.
+      The server now reports the grant on the `permission` message and the
+      client shows a banner naming the pane to re-enable it in.
 - [ ] Guided certificate-warning step with screenshots.
-- [ ] Real states for: Mac asleep / not running, phone on another network,
-      **Accessibility revoked** (currently silent — everything connects and
-      nothing moves), port already in use.
-- [ ] PWA manifest + icons.
+- [ ] Remaining states: Mac asleep / not running, phone on another network,
+      port already in use.
+- [ ] Offer the certificate for download so it can be trusted outright. This is
+      what would remove the warning entirely on the PWA path — see the open
+      question below.
 
 ## 5. Native iOS client
 
@@ -95,9 +109,15 @@ Only after the feature set stops moving.
 
 ## Open questions
 
-- Does the certificate exception survive Add-to-Home-Screen? If not, the PWA
-  shows the warning (or fails silently) on every launch, which would move the
-  native client up the list.
+- Does the certificate exception survive Add-to-Home-Screen? A home-screen web
+  app does not share Safari's per-site exception store, so the expectation is
+  **no** — and a standalone web app has no interstitial to tap through, so it
+  fails with nothing useful on screen. Now testable: the cert is finally valid
+  for the hostname, so the remaining question is purely about trust, not
+  matching. If it does fail, the fix is a one-time trusted-certificate install
+  on the phone (Settings › General › About › Certificate Trust Settings), which
+  is more setup steps but removes the warning permanently — a self-signed leaf
+  trusted this way can only vouch for itself, unlike installing a CA.
 - Is `switch_desktop` reproducible natively in Swift, or does the AppleScript
   path have to stay? Still open — the port kept the AppleScript path rather than
   gambling on it, and it works. See the port note in `PROTOCOL.md`.

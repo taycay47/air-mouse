@@ -36,7 +36,11 @@ public final class AirMouseServerRunner {
     /// off the main thread (see ServerManager.swift) so it doesn't stall a GUI.
     /// The server itself then runs on its own event loop thread.
     public func start(port: Int, webRoot: URL, appSupportDir: URL) throws -> Info {
-        let (certURL, keyURL) = try ensureCertAndKey(dir: appSupportDir)
+        // Computed before the cert so the cert can actually name the host the
+        // phone will ask for — see CertGeneration.swift on why CN alone is useless.
+        let hostname = localHostname()
+        let (certURL, keyURL) = try ensureCertAndKey(
+            dir: appSupportDir, hostname: hostname, ipAddresses: lanIPv4Addresses())
         let certificates = try NIOSSLCertificate.fromPEMFile(certURL.path)
         let privateKey = try NIOSSLPrivateKey(file: keyURL.path, format: .pem)
         let tlsConfig = TLSConfiguration.makeServerConfiguration(
@@ -92,8 +96,6 @@ public final class AirMouseServerRunner {
 
         channel = try bootstrap.bind(host: "::", port: port).wait()
 
-        var hostname = ProcessInfo.processInfo.hostName
-        if !hostname.hasSuffix(".local") { hostname += ".local" }
         return Info(pin: auth.pin, url: "https://\(hostname):\(port)")
     }
 

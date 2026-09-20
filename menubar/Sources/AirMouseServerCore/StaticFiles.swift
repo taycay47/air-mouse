@@ -15,6 +15,12 @@ private func contentType(for path: String) -> String {
     if path.hasSuffix(".css") { return "text/css" }
     if path.hasSuffix(".js") { return "text/javascript" }
     if path.hasSuffix(".png") { return "image/png" }
+    if path.hasSuffix(".svg") { return "image/svg+xml" }
+    if path.hasSuffix(".json") { return "application/json" }
+    // Served with the spec's type: Safari will not treat the file as a manifest
+    // if it arrives as text/plain, so the home-screen name and icon fall back to
+    // the page title and a screenshot.
+    if path.hasSuffix(".webmanifest") { return "application/manifest+json" }
     return "text/plain"
 }
 
