@@ -88,6 +88,16 @@ struct ContentView: View {
                     NSApp.terminate(nil)
                 }
             }
+
+            Divider()
+
+            // Removes what Finder cannot: the TCC grants, the cfprefsd-cached
+            // preferences, and the paired-device tokens. Confirms first, then
+            // quits — the work finishes after this process is gone.
+            Button("Uninstall Air Mouse…", role: .destructive) {
+                Uninstaller.confirmAndRun(server: server)
+            }
+            .controlSize(.small)
         }
         .padding(16)
         .frame(width: 240)

@@ -39,6 +39,10 @@ cp "$BIN_PATH" "$CONTENTS_DIR/MacOS/AirMouseBar"
 # The web client, served over HTTPS to the phone.
 cp -R "$REPO_ROOT/web" "$CONTENTS_DIR/Resources/web"
 
+# The uninstaller, so the app's "Uninstall…" button and the terminal path run
+# exactly the same script rather than two drifting definitions of "installed".
+cp "$SCRIPT_DIR/reset_install.sh" "$CONTENTS_DIR/Resources/reset_install.sh"
+
 # Sparkle, for in-place updates.
 #
 # SwiftPM links it but does not embed it — that is normally Xcode's job, and this
