@@ -48,7 +48,12 @@ final class PermissionsMonitor: ObservableObject {
         guard timer == nil else { return }
         refresh()
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            // Unwrapped before the Task rather than inside it. Reaching through
+            // `self?` from within a concurrently-executing closure is an error on
+            // Swift 5.x — it compiles on 6.3 locally and fails on the CI runner,
+            // which is the older toolchain.
+            guard let self else { return }
+            Task { @MainActor in self.refresh() }
         }
         // .common so polling continues while a menu is open or a window is being dragged.
         RunLoop.main.add(timer, forMode: .common)
