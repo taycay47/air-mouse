@@ -68,6 +68,9 @@ jobs:
           # v0.1.0 -> 0.1.0. Sparkle compares CFBundleVersion, so this has to
           # track the tag or no release is ever seen as newer than the last.
           APP_VERSION: ${{ github.ref_name }}
+          # Fail the release rather than quietly shipping a build that will not
+          # launch on Intel at all.
+          REQUIRE_UNIVERSAL: "1"
         run: |
           cd menubar
           export APP_VERSION="${APP_VERSION#v}"

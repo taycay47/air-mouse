@@ -16,13 +16,26 @@ CONFIG="${1:-debug}"
 # Xcode (xcbuild); with only Command Line Tools installed we fall back to a native
 # build and say so, rather than failing. CI has Xcode, so released artifacts are
 # universal even when local ones aren't.
+# Detected with `xcodebuild -version`, which succeeds only under a full Xcode.
+# The previous probe tested for a SharedFrameworks path that does not exist on
+# the GitHub runner, so CI silently shipped an arm64-only build while the site
+# advertised Intel support.
+#
+# REQUIRE_UNIVERSAL=1 turns that silent fallback into a hard failure. CI sets it:
+# a release that quietly drops half the supported machines is worse than a
+# release that does not build.
 ARCH_FLAGS=()
+REQUIRE_UNIVERSAL="${REQUIRE_UNIVERSAL:-0}"
 if [ "$CONFIG" = "release" ]; then
-    if [ -x "/Library/Developer/SharedFrameworks/XCBuild.framework/Versions/A/Support/xcbuild" ]; then
+    if xcodebuild -version >/dev/null 2>&1; then
         ARCH_FLAGS=(--arch arm64 --arch x86_64)
+    elif [ "$REQUIRE_UNIVERSAL" = "1" ]; then
+        echo "error: REQUIRE_UNIVERSAL=1 but no full Xcode is available." >&2
+        echo "       xcode-select -p => $(xcode-select -p 2>/dev/null || echo none)" >&2
+        exit 1
     else
         echo "warning: full Xcode not found — building for $(uname -m) only."
-        echo "         This build will NOT run on Intel Macs. CI produces universal builds."
+        echo "         This build will NOT run on Intel Macs."
     fi
 fi
 
@@ -157,6 +170,16 @@ sign "$APP_DIR"
 if [ "$IDENTITY" = "-" ]; then
     echo "note: ad-hoc signed. Gatekeeper will warn on other Macs, and the"
     echo "      Accessibility grant will not survive an update."
+fi
+
+# Assert the result rather than trusting the flags: this is the check that would
+# have caught the arm64-only release before it was published.
+if [ "$REQUIRE_UNIVERSAL" = "1" ]; then
+    PRODUCED_ARCHS="$(lipo -archs "$CONTENTS_DIR/MacOS/AirMouseBar" 2>/dev/null || echo unknown)"
+    case "$PRODUCED_ARCHS" in
+        *arm64*x86_64*|*x86_64*arm64*) echo "universal: $PRODUCED_ARCHS" ;;
+        *) echo "error: expected a universal binary, got: $PRODUCED_ARCHS" >&2; exit 1 ;;
+    esac
 fi
 
 echo "Built $APP_DIR"
