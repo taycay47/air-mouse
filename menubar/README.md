@@ -3,39 +3,61 @@
 A native macOS menu bar app for Air Mouse. Click the icon in the menu bar to
 start/stop the server and see the pairing QR code and PIN.
 
-## What this is (and isn't) v1
+## What this is
 
-This is a **wrapper**, not a rewrite: it manages `mouse_controller.py` as a
-child process and gives it a proper menu bar UI (status, QR code generated
-natively via CoreImage, PIN, start/stop). Mouse/keyboard injection still
-happens in the Python/CoreGraphics server, not in Swift.
+The whole thing, in Swift. There is no Python involved at runtime: input
+injection, the Accessibility layer, TLS, WebSocket, static file serving and
+pairing all run **in-process** inside this app. See
+`docs/adr/0002-port-input-injection-from-python-to-swift.md`.
 
-The natural next step is porting the CoreGraphics event-posting logic
-(`mouse_controller.py`'s `post_mouse_event`/`press_key`/`type_string`, etc.)
-directly into Swift, dropping the Python dependency entirely. That's a bigger
-project and deliberately out of scope here — this app exists to fix the
-distribution/UX problem (a Raycast extension can't ship a Python runtime, and
-users need a real onboarding/permissions flow) without blocking on that
-rewrite.
+`mouse_controller.py` is still in the repo as the reference implementation, and
+`docs/PROTOCOL.md` remains the specification both sides are written against.
+
+## Targets
+
+| Target | Kind | What it's for |
+| --- | --- | --- |
+| `AirMouseBar` | executable | The app. Menu bar UI + the server, in one process. |
+| `AirMouseServerCore` | library | TLS + WebSocket + HTTP + pairing. |
+| `AirMouseCore` | library | CGEvent injection and the Accessibility layer. |
+| `AirMouseInjector` | executable | Dev tool: reads JSON messages from stdin and injects them. Useful for testing injection without a phone. |
+| `AirMouseServer` | executable | Dev tool: runs the server standalone in a terminal, where its log output is visible. |
+
+The two dev tools are not part of the shipped app. They are separate binaries,
+so macOS treats them as separate applications for permissions — if you use them,
+they need their own Accessibility grant (see below).
 
 ## Building
 
 ```bash
-./build_app.sh          # debug build -> AirMouseBar.app
+swift build              # all targets
+./build_app.sh           # debug build -> AirMouseBar.app
 ./build_app.sh release   # release build
 ```
 
 Then `open AirMouseBar.app`, or move it to `/Applications`.
 
-It resolves the repo root (and therefore `.venv/bin/python3` and
-`mouse_controller.py`) relative to its own source location at compile time —
-it does not need to be told where the repo lives, as long as `menubar/` stays
-inside the same checkout.
+It resolves the repo root (and therefore `web/`) relative to its own source
+location at compile time, so it does not need to be told where the repo lives —
+as long as `menubar/` stays inside the same checkout. Making the bundle properly
+self-contained is step 2 of `docs/ROADMAP.md`.
 
 ## Permissions
 
-Same as running the server any other way: grant **Accessibility** to
-whichever binary actually posts the events. Since this app spawns Python as a
-child process, that means granting Accessibility to `.venv/bin/python3` (not
-to `AirMouseBar.app` itself) — check System Settings → Privacy & Security →
-Accessibility if input doesn't seem to reach the Mac.
+Grant **Accessibility** to `AirMouseBar` itself — it is the process that posts
+the events now, so there is nothing hidden to hunt down in a file picker. That
+was a large part of the point of the port.
+
+Two things worth knowing if input or the Copy/Paste pills stop working:
+
+- **A rebuild can invalidate the grant.** SwiftPM ad-hoc-signs each build, and
+  macOS keys the grant to the signature. Re-toggling the entry in System Settings
+  → Privacy & Security → Accessibility fixes it.
+- **`CGEventPost` and the Accessibility API do not fail together.** Cursor
+  movement can keep working while `AXUIElementCopyAttributeValue` returns
+  `kAXErrorCannotComplete`, which looks like an AX bug but means the grant isn't
+  really there for the process doing the asking.
+
+`switch_desktop` additionally needs **Automation** (System Events), requested
+the first time it is used — it goes through AppleScript because Mission Control
+ignores synthetic modifier flags from `CGEventPost`.

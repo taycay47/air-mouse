@@ -19,3 +19,13 @@ air-mouse/raycast-env.d.ts
 # Swift menu bar app build output
 menubar/.build/
 menubar/AirMouseBar.app/
+menubar/*.dmg
+menubar/*.dmg.zip
+
+# Release signing material — never commit. The Sparkle EdDSA private key signs
+# updates; anyone holding it can ship a binary that inherits users' Accessibility
+# permission. Belongs in CI secrets only (see ADR-0009).
+*.p12
+*.p8
+eddsa_priv
+sparkle_private*.pem

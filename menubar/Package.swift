@@ -7,11 +7,16 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.26.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     ],
     targets: [
         .executableTarget(
             name: "AirMouseBar",
-            dependencies: ["AirMouseCore", "AirMouseServerCore"],
+            dependencies: [
+                "AirMouseCore",
+                "AirMouseServerCore",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             path: "Sources/AirMouseBar"
         ),
         .target(

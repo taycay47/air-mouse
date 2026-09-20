@@ -1,8 +1,20 @@
 name: Release
 
 # Tagging a version (e.g. `git tag v0.1.0 && git push --tags`) builds the menu
-# bar app and publishes it as a GitHub Release. That release is the single
-# artifact both "manual download" and the Homebrew tap point at.
+# bar app, packages it as a .dmg, and publishes it to a GitHub Release together
+# with the Sparkle appcast the installed app polls for updates.
+#
+# Signing and notarization run only when the secrets below are present, so the
+# workflow still produces a build without them — it just produces one that
+# Gatekeeper blocks and whose updates would revoke the user's Accessibility
+# grant. See ADR-0009.
+#
+# Secrets:
+#   MACOS_CERT_P12 / MACOS_CERT_PASSWORD  Developer ID Application cert, base64
+#   MACOS_SIGN_IDENTITY                   "Developer ID Application: NAME (TEAM)"
+#   AC_API_KEY_P8 / AC_API_KEY_ID / AC_API_ISSUER_ID   notarytool credentials
+#   SPARKLE_PRIVATE_KEY                   EdDSA private key (generate_keys -x)
+#   SPARKLE_PUBLIC_KEY                    matching public key
 
 on:
   push:
@@ -18,32 +30,87 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build AirMouseBar.app
+      - name: Import signing certificate
+        if: ${{ env.MACOS_CERT_P12 != '' }}
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: |
-          cd menubar
-          chmod +x build_app.sh
-          ./build_app.sh release
+          # A throwaway keychain, so the runner never touches a shared one.
+          KEYCHAIN=build.keychain
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN"
+          echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+          security import cert.p12 -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          rm cert.p12
 
-      - name: Zip app bundle
+      - name: Build .dmg
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          SU_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+          SU_FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
         run: |
           cd menubar
-          # ditto (not plain zip) preserves resource forks/metadata correctly for .app bundles
-          ditto -c -k --sequesterRsrc --keepParent AirMouseBar.app AirMouseBar.zip
+          chmod +x build_app.sh make_dmg.sh
+          ./make_dmg.sh release
+
+      - name: Notarize and staple
+        if: ${{ secrets.AC_API_KEY_P8 != '' }}
+        env:
+          AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        run: |
+          echo "$AC_API_KEY_P8" | base64 --decode > api_key.p8
+          xcrun notarytool submit menubar/AirMouse.dmg \
+            --key api_key.p8 \
+            --key-id "$AC_API_KEY_ID" \
+            --issuer "$AC_API_ISSUER_ID" \
+            --wait
+          # Stapling matters: without it the app fails Gatekeeper on a machine
+          # that is offline the first time it runs.
+          xcrun stapler staple menubar/AirMouse.dmg
+          rm api_key.p8
+
+      - name: Generate Sparkle appcast
+        if: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          DOWNLOAD_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/
+        run: |
+          cd menubar
+          GENERATE_APPCAST="$(find .build/artifacts -name generate_appcast -type f -print -quit)"
+          mkdir -p appcast_input
+          cp AirMouse.dmg appcast_input/
+          echo "$SPARKLE_PRIVATE_KEY" > eddsa_priv
+          "$GENERATE_APPCAST" \
+            --ed-key-file eddsa_priv \
+            --download-url-prefix "$DOWNLOAD_PREFIX" \
+            appcast_input
+          rm eddsa_priv
+          cp appcast_input/appcast.xml .
 
       - name: Compute checksum
         id: checksum
         run: |
           cd menubar
-          SHA256=$(shasum -a 256 AirMouseBar.zip | awk '{print $1}')
-          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
-          echo "SHA256: $SHA256"
+          echo "sha256=$(shasum -a 256 AirMouse.dmg | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cd menubar
+          ASSETS="AirMouse.dmg"
+          [ -f appcast.xml ] && ASSETS="$ASSETS appcast.xml"
           gh release create "${{ github.ref_name }}" \
-            "menubar/AirMouseBar.zip" \
+            $ASSETS \
             --title "${{ github.ref_name }}" \
             --generate-notes \
-            --notes "SHA256 (AirMouseBar.zip): ${{ steps.checksum.outputs.sha256 }}"
+            --notes "SHA256 (AirMouse.dmg): ${{ steps.checksum.outputs.sha256 }}"
