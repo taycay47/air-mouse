@@ -18,18 +18,28 @@ final class ServerManager: ObservableObject {
     private let runner = AirMouseServerRunner()
     private let port = 8443
 
-    /// Repo root, resolved relative to this source file's own location at compile
-    /// time (`#filePath`) rather than a hardcoded path — consistent with how
-    /// toggle_mouse_server.sh and the Raycast extension locate the checkout.
-    private var repoRoot: URL {
-        URL(fileURLWithPath: #filePath)
+    /// Where the web client is served from.
+    ///
+    /// In a shipped `.app` this is `Contents/Resources/web` (build_app.sh copies it
+    /// in). The `#filePath` fallback is for development only — running from the
+    /// checkout via `swift run`, where there is no bundle to read from.
+    ///
+    /// A shipped build must never depend on `#filePath`: it is the *compile-time*
+    /// source path, so the binary would look for the developer's own home
+    /// directory and serve 404s everywhere else. That was ADR-0002's first
+    /// listed blocker.
+    private var webRoot: URL {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("web", isDirectory: true),
+           FileManager.default.fileExists(atPath: bundled.appendingPathComponent("index.html").path) {
+            return bundled
+        }
+        return URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent() // ServerManager.swift -> AirMouseBar/
             .deletingLastPathComponent() // AirMouseBar/ -> Sources/
             .deletingLastPathComponent() // Sources/ -> menubar/
             .deletingLastPathComponent() // menubar/ -> repo root
+            .appendingPathComponent("web", isDirectory: true)
     }
-
-    private var webRoot: URL { repoRoot.appendingPathComponent("web", isDirectory: true) }
 
     func start() {
         guard !isRunning else { return }
