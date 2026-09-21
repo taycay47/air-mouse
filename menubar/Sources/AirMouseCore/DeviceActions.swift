@@ -131,25 +131,7 @@ func switchDesktop(direction: String) {
     // modifier flags posted via CGEventPost from a non-HID source, so this must go
     // through osascript/System Events, not CGEvent. Requires the Automation permission.
     let keycode = direction == "right" ? 124 : 123
-    let script = "tell application \"System Events\" to key code \(keycode) using control down"
-
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-e", script]
-    let errPipe = Pipe()
-    process.standardError = errPipe
-
-    do {
-        try process.run()
-        process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let errText = String(data: errData, encoding: .utf8) ?? ""
-            logError("[Desktop] osascript failed (code \(process.terminationStatus)): \(errText)")
-        }
-    } catch {
-        logError("[Desktop] failed to launch osascript: \(error)")
-    }
+    systemEventsKey(keycode, using: "control down", label: "Desktop")
 }
 
 // Ported from handle_ws_client's inline gyro_factor: dampen slow jitter, neutral

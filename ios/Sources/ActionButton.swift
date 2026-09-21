@@ -1,12 +1,15 @@
 import SwiftUI
 import AirMouseProtocol
 
-/// Keyboard shortcuts, behind one button.
+/// The function row, behind one button.
 ///
-/// The web client kept these in a settings sheet, and the first native pass put
-/// them in a row that was always on screen — eight chips permanently occupying
-/// the bottom of a surface whose whole point is to be empty. They are used
-/// occasionally; they should be reachable, not resident.
+/// What is on it comes from `ActionSettings`, not from here: this view renders
+/// an array and has no opinion about its contents. A Customize-Toolbar screen
+/// later edits that array and this file does not change.
+///
+/// Icons only, no labels. These are the same glyphs as the keys they stand for —
+/// a phone held in one hand at arm's length is read by shape, and a row of text
+/// labels at this size is read by nobody.
 ///
 /// On iOS 26 the button and the panel share a `glassEffectID`, so the system
 /// morphs one into the other: the glass stretches open and settles rather than
@@ -14,6 +17,7 @@ import AirMouseProtocol
 /// Glass here rather than a material — it can express that the panel *is* the
 /// button, which a cross-fade cannot.
 struct ActionButton: View {
+    @ObservedObject var settings: ActionSettings
     let send: (ClientMessage) -> Void
     let haptics: Haptics
     let onFired: () -> Void
@@ -21,25 +25,10 @@ struct ActionButton: View {
     @State private var isOpen = false
     @Namespace private var glass
 
-    private struct Shortcut: Identifiable {
-        let id = UUID()
-        let label: String
-        let code: String
-        let modifiers: [KeyModifier]
-    }
-
-    private let shortcuts: [Shortcut] = [
-        .init(label: "⌘C", code: "c", modifiers: [.cmd]),
-        .init(label: "⌘V", code: "v", modifiers: [.cmd]),
-        .init(label: "⌘X", code: "x", modifiers: [.cmd]),
-        .init(label: "⌘Z", code: "z", modifiers: [.cmd]),
-        .init(label: "⌘A", code: "a", modifiers: [.cmd]),
-        .init(label: "⌘Tab", code: "tab", modifiers: [.cmd]),
-        .init(label: "⌘Space", code: "space", modifiers: [.cmd]),
-        .init(label: "⎋", code: "escape", modifiers: []),
-        .init(label: "⏎", code: "enter", modifiers: []),
-        .init(label: "⌫", code: "backspace", modifiers: []),
-    ]
+    /// Three across, which is what the groupings are: system, transport,
+    /// volume. Also the widest a panel can be and still sit in the corner it
+    /// opened from.
+    private let columns = 3
 
     var body: some View {
         Group {
@@ -54,7 +43,7 @@ struct ActionButton: View {
 
     @ViewBuilder
     private var content: some View {
-        if isOpen {
+        if isOpen && !settings.visible.isEmpty {
             panel
         } else {
             trigger
@@ -73,53 +62,57 @@ struct ActionButton: View {
         .foregroundStyle(.white)
         .glassSurface(in: Circle())
         .glassMorphID("actions", in: glass)
+        .accessibilityLabel("Actions")
     }
 
     private var panel: some View {
-        VStack(spacing: 10) {
-            // Two rows of five rather than one scrolling strip: every shortcut
-            // is reachable without hunting, and a horizontal scroller hides
-            // whatever it cannot fit.
+        VStack(alignment: .trailing, spacing: 8) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 8) {
-                    ForEach(row) { shortcut in
-                        Button {
-                            send(.key(code: shortcut.code, modifiers: shortcut.modifiers))
-                            haptics.play(.tap)
-                            onFired()
-                        } label: {
-                            Text(shortcut.label)
-                                .font(.system(size: 14, weight: .medium, design: .rounded))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 38)
-                        }
-                        .foregroundStyle(.white)
-                        .glassSurface(in: RoundedRectangle(cornerRadius: 11))
+                    ForEach(row) { action in
+                        button(for: action)
                     }
                 }
             }
 
+            // Closing sits where the trigger was, so the button appears to
+            // stay put while the panel grows out of it. Firing an action does
+            // *not* close: volume and transport are pressed repeatedly.
             Button {
                 isOpen = false
                 haptics.play(.tap)
             } label: {
-                Text("Done")
+                Image(systemName: "xmark")
                     .font(.system(size: 15, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 40)
+                    .frame(width: ControlMetrics.size, height: ControlMetrics.size)
             }
-            .foregroundStyle(.white)
-            .glassSurface(in: RoundedRectangle(cornerRadius: 12))
+            .foregroundStyle(.white.opacity(0.7))
+            .accessibilityLabel("Close actions")
         }
-        .padding(12)
-        .glassSurface(in: RoundedRectangle(cornerRadius: 24), interactive: false)
+        .padding(10)
+        .glassSurface(in: RoundedRectangle(cornerRadius: 26), interactive: false)
         .glassMorphID("actions", in: glass)
-        .padding(.horizontal, 16)
     }
 
-    private var rows: [[Shortcut]] {
-        stride(from: 0, to: shortcuts.count, by: 5).map {
-            Array(shortcuts[$0..<min($0 + 5, shortcuts.count)])
+    private func button(for action: ActionItem) -> some View {
+        Button {
+            send(action.message)
+            haptics.play(.tap)
+            onFired()
+        } label: {
+            Image(systemName: action.icon)
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: ControlMetrics.size, height: ControlMetrics.size)
+        }
+        .foregroundStyle(.white)
+        .glassSurface(in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityLabel(action.title)
+    }
+
+    private var rows: [[ActionItem]] {
+        let items = settings.visible
+        return stride(from: 0, to: items.count, by: columns).map {
+            Array(items[$0..<min($0 + columns, items.count)])
         }
     }
 }

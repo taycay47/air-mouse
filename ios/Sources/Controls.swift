@@ -7,6 +7,13 @@ import AirMouseProtocol
 /// false rather than omitting it (ADR-0005), so a pill that cannot be offered
 /// honestly is simply not offered — a Copy button that silently does nothing is
 /// worse than no Copy button.
+///
+/// These are now the same shape and size as the action and keyboard buttons
+/// below them, and stack into the same column, so the bottom-right corner is one
+/// list of controls that grows and shrinks rather than two kinds of thing in two
+/// idioms. Icons only, matching the panel: `Copy` and `Paste` in text made two
+/// capsules of different widths that shuffled the column sideways as they came
+/// and went.
 struct ContextPills: View {
     let hasSelection: Bool
     let hasClipboard: Bool
@@ -14,7 +21,7 @@ struct ContextPills: View {
     let haptics: Haptics
 
     var body: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 10) {
             if hasSelection {
                 pill("Copy", icon: "doc.on.doc") {
                     send(.key(code: "c", modifiers: [.cmd]))
@@ -37,13 +44,13 @@ struct ContextPills: View {
             haptics.play(.tap)
             action()
         } label: {
-            Label(title, systemImage: icon)
-                .font(.system(size: 14, weight: .medium))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .glassSurface(in: Capsule())
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: ControlMetrics.size, height: ControlMetrics.size)
         }
         .foregroundStyle(.white)
+        .glassSurface(in: Circle())
+        .accessibilityLabel(title)
     }
 }
 
@@ -100,7 +107,6 @@ struct KeyboardBar: View {
             .foregroundStyle(.white)
             .glassSurface(in: Circle())
         }
-        .padding(.horizontal, 16)
         .onAppear { isFocused = true }
     }
 

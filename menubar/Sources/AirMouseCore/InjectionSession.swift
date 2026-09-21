@@ -175,6 +175,12 @@ public final class InjectionSession {
                         announceFocus: false
                     )
                 }
+            } else {
+                // Function-row actions: media transport, volume, Mission
+                // Control. Each needs its own route into macOS, none of them a
+                // virtual keycode (SystemKeys.swift). Still ignored silently if
+                // unrecognised, per protocol invariant 2.
+                _ = pressSystemKey(code)
             }
 
         case "keyboard":

@@ -32,6 +32,9 @@ struct ContentView: View {
     @State private var typed = ""
     @State private var showKeyboard = false
     @State private var effects = SurfaceEffects()
+    /// Which actions the panel offers. A stored arrangement today, an editable
+    /// one later; the views already read it rather than a hardcoded list.
+    @StateObject private var actions = ActionSettings()
 
     private var isOffline: Bool { !connection.isLive }
 
@@ -237,40 +240,51 @@ struct ContentView: View {
 
             Spacer()
 
-            ContextPills(hasSelection: connection.hasSelection,
-                         hasClipboard: connection.hasClipboard,
-                         send: { connection.send($0) },
-                         haptics: haptics)
+            // One column in the bottom-right corner, everything in it the same
+            // size and on the same edge. The keyboard's open and close buttons
+            // are the same control in the same place — before, one was bottom
+            // left and the other bottom right, and they were different sizes,
+            // so dismissing the keyboard meant hunting for a button that had
+            // moved across the screen.
+            VStack(alignment: .trailing, spacing: 10) {
+                ContextPills(hasSelection: connection.hasSelection,
+                             hasClipboard: connection.hasClipboard,
+                             send: { connection.send($0) },
+                             haptics: haptics)
 
-            if showKeyboard {
-                KeyboardBar(text: $typed,
-                            macFieldFocused: connection.macFieldFocused,
-                            send: { connection.send($0) },
-                            haptics: haptics,
-                            onDone: { showKeyboard = false })
-                    .padding(.top, 10)
-            } else {
-                HStack(spacing: 12) {
+                ActionButton(settings: actions,
+                             send: { connection.send($0) },
+                             haptics: haptics,
+                             onFired: { effects.pulse(.success, at: CACurrentMediaTime()) })
+
+                if showKeyboard {
+                    KeyboardBar(text: $typed,
+                                macFieldFocused: connection.macFieldFocused,
+                                send: { connection.send($0) },
+                                haptics: haptics,
+                                onDone: { showKeyboard = false })
+                        .frame(maxWidth: .infinity)
+                } else {
                     Button {
                         showKeyboard = true
                         haptics.play(.tap)
                     } label: {
-                        // The chevron points up, because that is what the
-                        // button does. Its counterpart already pointed down.
-                        Image(systemName: "keyboard.chevron.compact.up")
+                        // Plain `keyboard`, because `keyboard.chevron.compact.up`
+                        // is not an SF Symbol — only the `.down` and `.left`
+                        // variants exist, so the button was rendering nothing at
+                        // all. The chevron belongs to dismissal anyway.
+                        Image(systemName: "keyboard")
                             .font(.system(size: 18, weight: .medium))
                             .frame(width: ControlMetrics.size,
                                    height: ControlMetrics.size)
                     }
                     .foregroundStyle(.white)
                     .glassSurface(in: Circle())
-
-                    ActionButton(send: { connection.send($0) },
-                                 haptics: haptics,
-                                 onFired: { effects.pulse(.success, at: CACurrentMediaTime()) })
+                    .accessibilityLabel("Keyboard")
                 }
-                .padding(.top, 10)
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 16)
         }
         .padding(.bottom, 14)
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showKeyboard)

@@ -149,6 +149,25 @@ Side effects:
 (`enter`, `backspace`, `escape`, `tab`, `space`, letters, …). Unknown codes are
 ignored. `modifiers` is any of `cmd`, `shift`, `alt`, `ctrl`.
 
+A second group of codes is not a keycode at all and takes its own route into
+macOS (`SystemKeys.swift`), but travels as an ordinary `key` message so the wire
+format stays one shape:
+
+| code | how it is sent | modifiers |
+|---|---|---|
+| `playpause`, `nexttrack`, `previoustrack` | `NX_SYSDEFINED` event, subtype 8 | ignored |
+| `mute`, `volumeup`, `volumedown` | `NX_SYSDEFINED` event, subtype 8 | ignored |
+| `missioncontrol` | System Events, `⌃↑` | ignored |
+
+`missioncontrol` needs the Automation permission, for the same reason
+`switch_desktop` does: Mission Control drops synthetic modifier flags from a
+non-HID source.
+
+Brightness and dictation are deliberately absent. Brightness no longer responds
+to `NX_KEYTYPE_BRIGHTNESS` from a synthetic event, and dictation is bound to a
+double-press of a modifier rather than to a keystroke; neither can be sent
+honestly, so neither has a code.
+
 Side effect: `⌘C`/`⌘X`/`⌘V`/`⌘A` re-check and emit `context`.
 
 ### `keyboard` — literal text
