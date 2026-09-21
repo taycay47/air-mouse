@@ -29,6 +29,7 @@ public final class AirMouseServerRunner {
 
     private var group: MultiThreadedEventLoopGroup?
     private var channel: Channel?
+    private let bonjour = BonjourAdvertiser()
 
     public init() {}
 
@@ -96,10 +97,17 @@ public final class AirMouseServerRunner {
 
         channel = try bootstrap.bind(host: "::", port: port).wait()
 
+        // Advertised only after the bind succeeded: a record pointing at a port
+        // nothing is listening on makes a phone hang rather than fail.
+        bonjour.start(port: port)
+
         return Info(pin: auth.pin, url: "https://\(hostname):\(port)")
     }
 
     public func stop() {
+        // Withdrawn first, so nothing new discovers the server while it is on
+        // its way down.
+        bonjour.stop()
         try? channel?.close().wait()
         try? group?.syncShutdownGracefully()
         channel = nil
