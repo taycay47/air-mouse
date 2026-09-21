@@ -43,6 +43,22 @@ final class SurfaceEffects {
     private let minRippleDistance: Double = 22
     private let minRippleInterval: Double = 0.05
 
+    // MARK: Appearance
+    //
+    // Raised from the web client's values. The browser drew this on a screen
+    // the eye had already adjusted to; on an OLED phone at ambient brightness
+    // the resting grid at 0.07 was effectively invisible.
+
+    /// Alpha of a dot at rest.
+    static let restingAlpha: Double = 0.13
+    /// Slightly stronger while disconnected, so the red state is legible at a
+    /// glance rather than only once a pulse crosses it.
+    static let restingAlphaOffline: Double = 0.17
+    /// Diameter of a resting dot.
+    static let restingDiameter: Double = 2.2
+    /// How much a fully excited dot grows beyond its resting size.
+    static let peakSizeGain: Double = 6.5
+
     // MARK: State
 
     private struct Dot {
@@ -250,22 +266,30 @@ struct DotGrid: View {
                 let colour: Color
                 if mix > 0, let flashColour {
                     colour = Color(red: flashColour.x, green: flashColour.y, blue: flashColour.z)
-                        .opacity(0.07 + 0.18 * mix)
+                        .opacity(SurfaceEffects.restingAlpha + 0.18 * mix)
                 } else if isOffline {
-                    colour = Color(red: 1, green: 88 / 255, blue: 78 / 255).opacity(0.10)
+                    colour = Color(red: 1, green: 88 / 255, blue: 78 / 255)
+                        .opacity(SurfaceEffects.restingAlphaOffline)
                 } else {
-                    colour = Color.white.opacity(0.07)
+                    colour = Color.white.opacity(SurfaceEffects.restingAlpha)
                 }
-                context.fill(Path(ellipseIn: CGRect(x: x - 1, y: y - 1, width: 2, height: 2)),
+                let r = SurfaceEffects.restingDiameter / 2
+                context.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r,
+                                                    width: r * 2, height: r * 2)),
                              with: .color(colour))
                 return
             }
 
-            let diameter = 1 + pow(excitement, 1.8) * 5.5
+            let diameter = SurfaceEffects.restingDiameter
+                + pow(excitement, 1.8) * SurfaceEffects.peakSizeGain
             // A little noise at the peak keeps an excited dot from reading as a
             // solid disc.
             let flicker = Double.random(in: -0.11...0.11) * excitement
-            let alpha = max(0, 0.07 + excitement * 0.93 + flicker)
+            // Ramps from the resting alpha to full, so the two paths meet
+            // continuously — starting from a lower base would make a barely
+            // excited dot dimmer than a resting one.
+            let alpha = max(0, SurfaceEffects.restingAlpha
+                + excitement * (1 - SurfaceEffects.restingAlpha) + flicker)
 
             var red = 1.0
             var green: Double
