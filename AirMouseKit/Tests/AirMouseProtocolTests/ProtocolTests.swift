@@ -158,6 +158,45 @@ final class ProtocolTests: XCTestCase {
                        .unknown(type: "battery"))
     }
 
+    // MARK: - Channel probing and the fast-channel offer
+
+    func testDecodesPing() throws {
+        XCTAssertEqual(try decodeClient(#"{"type":"ping","id":7}"#), .ping(id: 7))
+    }
+
+    func testPingEncodesItsID() throws {
+        let wire = try wire(ClientMessage.ping(id: 42))
+        XCTAssertEqual(wire["type"] as? String, "ping")
+        XCTAssertEqual(wire["id"] as? UInt32, 42)
+    }
+
+    func testDecodesPong() throws {
+        XCTAssertEqual(try decodeServer(#"{"type":"pong","id":7}"#), .pong(id: 7))
+    }
+
+    func testDecodesFastChannelOffer() throws {
+        let message = try decodeServer(
+            #"{"type":"fast_channel","port":51234,"key":"a2V5","identity":"abc","service":"airmouse-abc"}"#)
+        XCTAssertEqual(message, .fastChannel(.init(
+            port: 51234, key: "a2V5", identity: "abc", service: "airmouse-abc")))
+    }
+
+    /// The service name is how the channel gets a peer-to-peer path, but a
+    /// server that does not advertise one is still perfectly usable by port.
+    func testFastChannelOfferWithoutAServiceIsStillAnOffer() throws {
+        let message = try decodeServer(
+            #"{"type":"fast_channel","port":51234,"key":"a2V5","identity":"abc"}"#)
+        XCTAssertEqual(message, .fastChannel(.init(
+            port: 51234, key: "a2V5", identity: "abc", service: nil)))
+    }
+
+    /// An offer missing the key cannot be acted on, and a client that tried
+    /// would hand a nil key to DTLS. It is not an error, it is simply no offer.
+    func testIncompleteFastChannelOfferIsIgnored() throws {
+        XCTAssertEqual(try decodeServer(#"{"type":"fast_channel","port":51234}"#),
+                       .unknown(type: "fast_channel"))
+    }
+
     // MARK: - Round trips
 
     func testClientMessagesRoundTrip() throws {
@@ -173,6 +212,7 @@ final class ProtocolTests: XCTestCase {
             .keyboard(text: "hello ✨"),
             .switchDesktop(direction: .right),
             .calibrate,
+            .ping(id: 9),
         ]
         for message in messages {
             let data = try encoder.encode(message)
@@ -190,6 +230,9 @@ final class ProtocolTests: XCTestCase {
             .focusKeyboard,
             .context(hasSelection: true, hasClipboard: true),
             .permission(accessibility: false),
+            .pong(id: 9),
+            .fastChannel(.init(port: 1, key: "a2V5", identity: "i", service: "s")),
+            .fastChannel(.init(port: 1, key: "a2V5", identity: "i", service: nil)),
         ]
         for message in messages {
             let data = try encoder.encode(message)

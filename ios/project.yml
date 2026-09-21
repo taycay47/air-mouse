@@ -83,3 +83,7 @@ targets:
           anywhere else.
         NSBonjourServices:
           - _airmouse._tcp
+          # The fast channel advertises itself separately. Absent from this
+          # list, the browse simply returns nothing — the same silent failure
+          # the main service would have.
+          - _airmouse-fast._udp

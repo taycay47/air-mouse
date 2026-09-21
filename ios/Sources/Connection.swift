@@ -1,16 +1,20 @@
 import Foundation
 import Combine
+import Security
 import AirMouseProtocol
 
-/// The WebSocket connection to one Mac.
+/// The connection to one Mac.
 ///
 /// Certificate validation is replaced wholesale by pinning (see TrustStore):
 /// the server's certificate is self-signed and no browser or URLSession will
 /// ever accept it on its own terms. This is the difference between the native
 /// client and the web one — not a shortcut around a warning, but the reason the
 /// warning stops existing.
+///
+/// This type owns *what* is said. `ChannelSet` owns *how* it gets there, over
+/// however many channels are currently up.
 @MainActor
-final class Connection: NSObject, ObservableObject {
+final class Connection: ObservableObject {
 
     enum State: Equatable {
         case idle
@@ -38,24 +42,18 @@ final class Connection: NSObject, ObservableObject {
     @Published private(set) var hasSelection = false
     @Published private(set) var hasClipboard = false
 
-    private var session: URLSession?
-    private var task: URLSessionWebSocketTask?
-    private var macName = ""
-    private var pendingFingerprint: String?
+    /// Every open channel, and the choice between them.
+    let channels = ChannelSet()
 
-    private let encoder = JSONEncoder()
-    private let decoder = JSONDecoder()
+    private var macName = ""
+    private var pinning = PinRecorder()
 
     /// Fails an authentication that never gets an answer. The socket can be
     /// open — or believe it is — while the Mac is simply unreachable, and
     /// without this the UI spins indefinitely with nothing to act on.
     private var authTimeout: Task<Void, Never>?
     private var lastAddress = ""
-    /// Set when a certificate fails the pin. Stops the address loop: every
-    /// address reaches the same Mac and would present the same certificate, and
-    /// continuing would overwrite a security verdict with a generic "couldn't
-    /// reach" — hiding the one thing pinning exists to surface.
-    private var identityRejected = false
+    private var currentHost = ""
     /// The Mac to return to. Kept so a dropped connection — the phone locking,
     /// the app backgrounding, Wi-Fi blinking — can be retried without making
     /// the user pick it out of a list again.
@@ -94,15 +92,21 @@ final class Connection: NSObject, ObservableObject {
         Task { await attempt(candidates: candidates, port: port, macName: mac.name) }
     }
 
-    /// Tries each address until one authenticates. Sequential rather than
-    /// parallel: a successful connection pins a certificate and consumes a PIN
-    /// attempt, and racing several would do both more than once.
+    /// Tries each address until one connects. Sequential rather than parallel: a
+    /// successful connection pins a certificate and consumes a PIN attempt, and
+    /// racing several would do both more than once.
     private func attempt(candidates: [String], port: Int, macName: String) async {
-        identityRejected = false
+        pinning.reset()
         for address in candidates {
-            guard let url = URL(string: "wss://\(address):\(port)") else { continue }
-            if await open(url: url, address: address) { return }
-            if identityRejected { return }
+            if await open(host: address, port: port) { return }
+            // Every address reaches the same Mac and would present the same
+            // certificate, so a pinning refusal ends the loop rather than being
+            // overwritten by a generic "couldn't reach" from the next address —
+            // which would hide the one thing pinning exists to surface.
+            if pinning.rejected {
+                state = .identityChanged
+                return
+            }
         }
         scheduleReconnect()
         state = .failed("Couldn't reach \(macName).\n\nTried: "
@@ -111,54 +115,72 @@ final class Connection: NSObject, ObservableObject {
             + "the same Wi-Fi network.")
     }
 
-    /// Opens one candidate and reports whether it got far enough to be worth
-    /// keeping. Returns false quickly so the next address can be tried.
-    private func open(url: URL, address: String) async -> Bool {
-        lastAddress = "\(address):\(url.port ?? 8443)"
+    /// Opens one address over the best transport that will carry it.
+    ///
+    /// `ReliableTransport` first — Nagle off, voice service class, peer-to-peer
+    /// allowed — and URLSession's WebSocket only if that fails. The fallback is
+    /// worth having because it is *different*: the most ordinary thing on the
+    /// network, and therefore the most likely to survive a network that objects
+    /// to the rest.
+    private func open(host: String, port: Int) async -> Bool {
+        lastAddress = "\(host):\(port)"
+        currentHost = host
 
-        // A delegate-backed session, because the certificate check is the whole
-        // point and that only arrives through the delegate.
-        let configuration = URLSessionConfiguration.ephemeral
-        // Without this the handshake to an unreachable host hangs for the
-        // default 60 seconds, which reads as a frozen app.
-        configuration.timeoutIntervalForRequest = 10
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-        let task = session.webSocketTask(with: url)
-        self.session = session
-        self.task = task
+        let verify = pinning.verifier(for: macName)
+        let candidates: [Transport] = [
+            ReliableTransport(host: host, port: port, verify: verify),
+            CompatTransport(host: host, port: port, verify: verify),
+        ]
 
-        task.resume()
-        receive()
+        for transport in candidates {
+            if await bringUp(transport) {
+                adopt(transport)
+                return true
+            }
+            transport.cancel()
+            if pinning.rejected { return false }
+        }
+        return false
+    }
 
-        // A reachability probe, not the full handshake: send nothing, just see
-        // whether the socket comes up. `ping` completes only once the WebSocket
-        // is genuinely established, which is exactly the thing an unreachable
-        // address never does.
-        let reachable = await withCheckedContinuation { continuation in
+    /// Resolves as soon as the transport is usable, or gives up on it.
+    private func bringUp(_ transport: Transport) async -> Bool {
+        await withCheckedContinuation { continuation in
             var resumed = false
-            task.sendPing { error in
+            let settle: (Bool) -> Void = { value in
                 guard !resumed else { return }
                 resumed = true
-                continuation.resume(returning: error == nil)
+                continuation.resume(returning: value)
             }
+            transport.onReady = { settle(true) }
+            transport.onClose = { _ in settle(false) }
+            transport.start()
+
             Task {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume(returning: false)
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                settle(false)
             }
         }
+    }
 
-        guard reachable else {
-            task.cancel(with: .goingAway, reason: nil)
-            session.invalidateAndCancel()
-            self.task = nil
-            self.session = nil
-            return false
+    private func adopt(_ transport: Transport) {
+        // Replaced now that the transport is live: `bringUp`'s handlers were
+        // only ever about whether it came up.
+        transport.onReady = nil
+        transport.onClose = { [weak self] _ in self?.channelDropped() }
+        channels.adopt(transport) { [weak self] message in
+            self?.handle(message)
         }
-
         authenticate()
-        return true
+    }
+
+    private func channelDropped() {
+        guard !intentionallyClosed, currentMac != nil else { return }
+        // Retry rather than stranding the user on an error screen: this fires
+        // every time the phone locks, and making them press Back and pick the
+        // Mac again for an interruption they did not cause is the wrong answer.
+        state = .connecting
+        scheduleReconnect()
     }
 
     /// Returns to the picker from a failure, without tearing anything down —
@@ -187,8 +209,8 @@ final class Connection: NSObject, ObservableObject {
         case .connected, .connecting, .authenticating, .needsPIN:
             return
         case .idle, .failed, .identityChanged:
-            // identityChanged is excluded on purpose further down: retrying a
-            // rejected certificate would loop, and it needs a human decision.
+            // identityChanged is excluded on purpose: retrying a rejected
+            // certificate would loop, and it needs a human decision.
             guard state != .identityChanged else { return }
             connect(to: mac)
         }
@@ -214,10 +236,7 @@ final class Connection: NSObject, ObservableObject {
     func disconnect() {
         cancelAuthTimeout()
         cancelReconnect()
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
-        session?.invalidateAndCancel()
-        session = nil
+        channels.closeAll()
         state = .idle
     }
 
@@ -227,7 +246,7 @@ final class Connection: NSObject, ObservableObject {
     func acceptNewIdentity() {
         TrustStore.forget(macName)
         TokenStore.forget(macName)
-        identityRejected = false
+        pinning.reset()
         state = .idle
         // Reconnects straight away rather than waiting for discovery to change:
         // the Mac is already known, and nothing is going to change to trigger
@@ -271,69 +290,19 @@ final class Connection: NSObject, ObservableObject {
     // MARK: - Sending
 
     func send(_ message: ClientMessage) {
-        guard let task, let data = try? encoder.encode(message) else { return }
-        // A *text* frame, not binary. The server reads only text opcodes, and
-        // discards binary ones silently — a client that sends binary gets no
-        // error, no close, and no reply, which is indistinguishable from an
-        // unreachable Mac. docs/PROTOCOL.md now states this explicitly.
-        guard let json = String(data: data, encoding: .utf8) else { return }
-        task.send(.string(json)) { error in
-            if let error { NSLog("Air Mouse: send failed — \(error.localizedDescription)") }
-        }
+        channels.send(message)
     }
 
     // MARK: - Receiving
 
-    private func receive() {
-        task?.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                switch result {
-                case .success(let message):
-                    self.handle(message)
-                    self.receive()
-                case .failure(let error):
-                    // A cancelled task is an ordinary disconnect, not a failure
-                    // worth showing.
-                    guard self.task != nil else { return }
-                    if self.currentMac != nil, !self.intentionallyClosed {
-                        // Retry rather than stranding the user on an error
-                        // screen: this fires every time the phone locks, and
-                        // making them press Back and pick the Mac again for an
-                        // interruption they did not cause is the wrong answer.
-                        self.state = .connecting
-                        self.scheduleReconnect()
-                    } else {
-                        self.state = .failed(error.localizedDescription)
-                    }
-                }
-            }
-        }
-    }
-
-    private func handle(_ message: URLSessionWebSocketTask.Message) {
-        let data: Data
-        switch message {
-        case .data(let d): data = d
-        case .string(let s): data = Data(s.utf8)
-        @unknown default: return
-        }
-
-        // A message that cannot be decoded at all is dropped rather than
-        // surfaced: docs/PROTOCOL.md requires unknown input to be ignored, and
-        // AirMouseProtocol already folds unrecognised types into `.unknown`.
-        guard let message = try? decoder.decode(ServerMessage.self, from: data) else { return }
-
+    private func handle(_ message: ServerMessage) {
         switch message {
         case .authOk(let token):
             cancelAuthTimeout()
             // Issued on every successful auth, including token auth, so tokens
             // rotate. Always store the newest.
             TokenStore.save(token, for: macName)
-            if let fingerprint = pendingFingerprint {
-                TrustStore.pin(fingerprint, for: macName)
-                pendingFingerprint = nil
-            }
+            pinning.commit(for: macName)
             state = .connected
 
         case .authFail(let reason):
@@ -342,6 +311,18 @@ final class Connection: NSObject, ObservableObject {
             state = .needsPIN(message: reason == .rateLimited
                 ? "Too many attempts. Wait a moment and try again."
                 : "Wrong PIN. Check the Air Mouse window on your Mac.")
+
+        case .fastChannel(let offer):
+            // Only ever acted on after authentication: before that there is no
+            // session for it to belong to, and the offer would be coming from
+            // something that has not proved it is the Mac.
+            guard state == .connected else { return }
+            channels.openFast(
+                offer: FastChannelOffer(port: offer.port,
+                                        key: offer.key,
+                                        identity: offer.identity,
+                                        service: offer.service),
+                host: currentHost)
 
         case .permission(let granted):
             accessibilityGranted = granted
@@ -356,6 +337,9 @@ final class Connection: NSObject, ObservableObject {
             hasSelection = selection
             hasClipboard = clipboard
 
+        case .pong:
+            break // consumed by ChannelSet, which timed it
+
         case .unknown:
             break
         }
@@ -364,40 +348,58 @@ final class Connection: NSObject, ObservableObject {
 
 // MARK: - Certificate pinning
 
-extension Connection: URLSessionDelegate {
-    nonisolated func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = challenge.protectionSpace.serverTrust
-        else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
+/// The pinning verdict, reachable from whichever thread a transport does its
+/// TLS handshake on.
+///
+/// Both transports verify the same way and record the same outcome here; the
+/// connection reads it later, on the main actor. The lock exists because
+/// Network.framework's verify block and URLSession's delegate run on their own
+/// queues and neither offers a choice about it.
+final class PinRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: String?
+    private var refused = false
 
-        Task { @MainActor in
-            guard let verdict = TrustStore.verdict(for: self.macName, trust: trust) else {
-                completionHandler(.cancelAuthenticationChallenge, nil)
-                return
-            }
+    var rejected: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return refused
+    }
 
+    func reset() {
+        lock.lock(); defer { lock.unlock() }
+        pending = nil
+        refused = false
+    }
+
+    /// Writes the held fingerprint, if any.
+    ///
+    /// Called on `auth_ok` and nowhere else: pinning at handshake time would
+    /// record whatever answered first, including a machine that cannot produce
+    /// the PIN.
+    func commit(for mac: String) {
+        lock.lock()
+        let fingerprint = pending
+        pending = nil
+        lock.unlock()
+        if let fingerprint { TrustStore.pin(fingerprint, for: mac) }
+    }
+
+    func verifier(for mac: String) -> @Sendable (SecTrust) -> Bool {
+        { [self] trust in
+            guard let verdict = TrustStore.verdict(for: mac, trust: trust) else { return false }
             switch verdict {
             case .matches:
-                completionHandler(.useCredential, URLCredential(trust: trust))
-
+                return true
             case .firstUse(let fingerprint):
-                // Held, not written, until authentication succeeds. Pinning
-                // here would record whatever answered first — including a
-                // machine that cannot produce the PIN.
-                self.pendingFingerprint = fingerprint
-                completionHandler(.useCredential, URLCredential(trust: trust))
-
+                lock.lock()
+                pending = fingerprint
+                lock.unlock()
+                return true
             case .mismatch:
-                self.identityRejected = true
-                self.state = .identityChanged
-                completionHandler(.cancelAuthenticationChallenge, nil)
+                lock.lock()
+                refused = true
+                lock.unlock()
+                return false
             }
         }
     }

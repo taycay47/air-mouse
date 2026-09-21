@@ -20,6 +20,10 @@ public enum ClientMessage: Equatable, Sendable {
     case keyboard(text: String)
     case switchDesktop(direction: DesktopDirection)
     case calibrate
+    /// A round-trip probe. Sent on each open channel independently; the server
+    /// answers on whichever channel it arrived by, so the reply's latency is
+    /// attributable to that channel without either side naming it.
+    case ping(id: UInt32)
     /// A recognised envelope carrying a `type` this build does not know, or a
     /// known type whose payload could not be understood. Ignore it.
     case unknown(type: String)
@@ -72,6 +76,7 @@ extension ClientMessage: Codable {
         case code, modifiers
         case text
         case direction
+        case id
     }
 
     public init(from decoder: Decoder) throws {
@@ -147,6 +152,9 @@ extension ClientMessage: Codable {
         case "calibrate":
             self = .calibrate
 
+        case "ping":
+            self = .ping(id: try container.decodeIfPresent(UInt32.self, forKey: .id) ?? 0)
+
         default:
             self = .unknown(type: type)
         }
@@ -203,6 +211,10 @@ extension ClientMessage: Codable {
 
         case .calibrate:
             try container.encode("calibrate", forKey: .type)
+
+        case .ping(let id):
+            try container.encode("ping", forKey: .type)
+            try container.encode(id, forKey: .id)
 
         case .unknown(let type):
             try container.encode(type, forKey: .type)

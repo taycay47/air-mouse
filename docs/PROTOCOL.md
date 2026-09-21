@@ -201,6 +201,56 @@ dictation. Deletion is **not** expressed here — the client sends explicit
 
 Resets the gyro baseline. No response.
 
+### `ping` — round-trip probe
+
+```json
+{ "type": "ping", "id": 7 }
+```
+
+Answered with `pong` carrying the same `id`, **on the channel the ping arrived
+by**. That is the whole point of it: a ping sent over UDP and answered over TCP
+would measure neither.
+
+Answered before anything else in the handler and never passed to the injector,
+so the measurement is of the network rather than of the server's own queueing.
+`id` is opaque to the server.
+
+---
+
+## Channels
+
+There are two ways into the server, and a client may use both at once.
+
+**Reliable — TLS/WebSocket over TCP, port 8443.** Everything begins here:
+authentication, keystrokes, clicks, every state message. This is the only
+channel the web client has, and a native client that uses nothing else is fully
+functional.
+
+**Fast — DTLS over UDP, ephemeral port.** Offered by the server after `auth_ok`
+(see `fast_channel`). Carries `trackpad`, `scroll` and `motion` only.
+
+The split exists because TCP's guarantee is wrong for movement. A delta that
+arrives 150ms late is worse than one that never arrives — the cursor freezes and
+then jumps — and on a congested access point a single lost packet stalls
+everything behind it until the retransmit lands. Over UDP a lost delta is lost,
+and the next one corrects the small error it left.
+
+**There are no sequence numbers, deliberately.** Deltas add, and addition
+commutes, so movement packets arriving out of order produce the same cursor
+position as in-order ones. Only loss matters, and loss is what this channel
+chooses to accept.
+
+Rules:
+
+- Anything unrepeatable — clicks, keys, text, auth — stays on the reliable
+  channel. A dropped delta costs a few pixels; a dropped click costs a click.
+- **While a mouse button is held, movement goes back to the reliable channel.**
+  The two channels have independent latency, and a `click`/`down` that lands
+  after the movement it was meant to precede starts a drag in the wrong place.
+- A client must not send on the fast channel until a `ping` sent over it has
+  been answered over it. A completed DTLS handshake means the port is open, not
+  that packets are getting through.
+
 ---
 
 ## State messages (server → client)
@@ -282,6 +332,45 @@ move. The client shows a banner naming the pane to re-enable it in.
 
 Clients must treat a missing `accessibility` field as `true`, so that a server
 too old to send this message is not reported as broken.
+
+### `pong`
+
+```json
+{ "type": "pong", "id": 7 }
+```
+
+The answer to a `ping`, echoing its `id`, sent on the channel the ping arrived
+by.
+
+### `fast_channel`
+
+```json
+{
+  "type": "fast_channel",
+  "port": 51234,
+  "key": "<base64, 32 bytes>",
+  "identity": "<uuid>",
+  "service": "airmouse-1a2b3c4d"
+}
+```
+
+An offer of the DTLS/UDP channel. Sent once, immediately after `auth_ok`, and
+only over the reliable connection — which by then has authenticated and had its
+certificate pinned. That envelope is what makes handing a key over in plain JSON
+sound.
+
+- `key` and `identity` are the DTLS pre-shared key and its identity, fresh per
+  session. **Completing the handshake is the authentication**: there is no
+  second PIN, token or replay window.
+- `port` and `service` are two routes to the same listener. Connecting by
+  service lets the system choose the path, including a direct AWDL radio link
+  that never touches the access point; connecting by port is what works when it
+  cannot. A client should try the service first and fall back to the port.
+- The listener and its key are torn down with the connection that offered them.
+
+Advisory like everything else here: a client that ignores this message keeps
+working exactly as before, which is what every client older than it does. If the
+listener cannot be opened, the server sends nothing and says nothing.
 
 ---
 

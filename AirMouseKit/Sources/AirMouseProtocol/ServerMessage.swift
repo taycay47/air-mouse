@@ -21,7 +21,38 @@ public enum ServerMessage: Equatable, Sendable {
     /// state message reporting something the user must act on: without the
     /// grant everything connects and nothing moves.
     case permission(accessibility: Bool)
+    /// The answer to a `ping`, on the channel the ping arrived by.
+    case pong(id: UInt32)
+    /// An offer of a faster channel: a DTLS-over-UDP port, and the pre-shared
+    /// key that authenticates it.
+    ///
+    /// Only ever sent over the already-authenticated, certificate-pinned
+    /// connection, which is what makes handing a key over in cleartext JSON
+    /// sound: the envelope is the security boundary. A client that ignores
+    /// this message keeps working exactly as before — which is what every
+    /// client older than this message does.
+    case fastChannel(FastChannel)
     case unknown(type: String)
+
+    public struct FastChannel: Equatable, Sendable {
+        public var port: Int
+        /// Base64. 32 random bytes, fresh per session.
+        public var key: String
+        public var identity: String
+        /// A Bonjour instance name for the same listener, when it has one.
+        ///
+        /// Two ways to the same socket: reaching it by service lets the system
+        /// choose the path, including a direct AWDL link that never touches the
+        /// access point; reaching it by address is what works when it does not.
+        public var service: String?
+
+        public init(port: Int, key: String, identity: String, service: String? = nil) {
+            self.port = port
+            self.key = key
+            self.identity = identity
+            self.service = service
+        }
+    }
 }
 
 // MARK: - Coding
@@ -35,6 +66,11 @@ extension ServerMessage: Codable {
         case hasSelection
         case hasClipboard
         case accessibility
+        case id
+        case port
+        case key
+        case identity
+        case service
     }
 
     public init(from decoder: Decoder) throws {
@@ -71,6 +107,23 @@ extension ServerMessage: Codable {
             self = .permission(
                 accessibility: try container.decodeIfPresent(Bool.self, forKey: .accessibility) ?? true)
 
+        case "pong":
+            self = .pong(id: try container.decodeIfPresent(UInt32.self, forKey: .id) ?? 0)
+
+        case "fast_channel":
+            // A malformed offer is not an error, it is simply no offer: the
+            // reliable channel is already carrying everything.
+            guard let port = try container.decodeIfPresent(Int.self, forKey: .port),
+                  let key = try container.decodeIfPresent(String.self, forKey: .key),
+                  let identity = try container.decodeIfPresent(String.self, forKey: .identity)
+            else {
+                self = .unknown(type: type)
+                return
+            }
+            self = .fastChannel(FastChannel(
+                port: port, key: key, identity: identity,
+                service: try container.decodeIfPresent(String.self, forKey: .service)))
+
         default:
             self = .unknown(type: type)
         }
@@ -102,6 +155,17 @@ extension ServerMessage: Codable {
         case .permission(let accessibility):
             try container.encode("permission", forKey: .type)
             try container.encode(accessibility, forKey: .accessibility)
+
+        case .pong(let id):
+            try container.encode("pong", forKey: .type)
+            try container.encode(id, forKey: .id)
+
+        case .fastChannel(let offer):
+            try container.encode("fast_channel", forKey: .type)
+            try container.encode(offer.port, forKey: .port)
+            try container.encode(offer.key, forKey: .key)
+            try container.encode(offer.identity, forKey: .identity)
+            try container.encodeIfPresent(offer.service, forKey: .service)
 
         case .unknown(let type):
             try container.encode(type, forKey: .type)

@@ -22,6 +22,9 @@ final class WebSocketHandler: ChannelInboundHandler {
     /// wire. nil until the first report.
     private var lastReportedPermission: Bool?
     private var permissionTimer: RepeatedTask?
+    /// The DTLS/UDP channel offered to this client, if it could be opened.
+    /// Per-session, so its key dies with the session.
+    private var fast: FastChannel?
 
     init(auth: AuthState) {
         self.auth = auth
@@ -33,6 +36,8 @@ final class WebSocketHandler: ChannelInboundHandler {
     func channelInactive(context: ChannelHandlerContext) {
         permissionTimer?.cancel()
         permissionTimer = nil
+        fast?.stop()
+        fast = nil
         releaseHeldButtons()
         context.fireChannelInactive()
     }
@@ -71,6 +76,15 @@ final class WebSocketHandler: ChannelInboundHandler {
     }
 
     private func handlePacket(_ packet: [String: Any], context: ChannelHandlerContext) {
+        let channel = context.channel
+        handlePacket(packet, channel: channel, reply: { sendJSONFrame($0, channel: channel) })
+    }
+
+    /// `reply` answers on whichever channel the packet arrived by. A `ping` that
+    /// came in over UDP must be answered over UDP or its round-trip time
+    /// measures the wrong thing entirely.
+    private func handlePacket(_ packet: [String: Any], channel: Channel,
+                              reply: @escaping ([String: Any]) -> Void) {
         guard let type = packet["type"] as? String else { return } // unknown/malformed — ignored
 
         // Every control message before auth_ok must be dropped (docs/PROTOCOL.md).
@@ -88,15 +102,24 @@ final class WebSocketHandler: ChannelInboundHandler {
                 // over. Releasing here recovers automatically from a client that
                 // dropped mid-drag without sending its 'up' (ADR-0006).
                 releaseHeldButtons()
-                sendJSON(["type": "auth_ok", "token": issuedToken], context: context)
-                startPermissionReporting(context: context)
+                reply(["type": "auth_ok", "token": issuedToken])
+                startPermissionReporting(channel: channel)
+                offerFastChannel(channel: channel)
             case .failRateLimited:
                 logError("auth rate limited")
-                sendJSON(["type": "auth_fail", "reason": "rate_limited"], context: context)
+                reply(["type": "auth_fail", "reason": "rate_limited"])
             case .failInvalid:
                 logError("auth invalid")
-                sendJSON(["type": "auth_fail"], context: context)
+                reply(["type": "auth_fail"])
             }
+            return
+        }
+
+        // Answered before anything else touches it, and never handed to the
+        // injector: a probe that queued behind a focus check would measure the
+        // server's own scheduling rather than the network.
+        if type == "ping" {
+            reply(["type": "pong", "id": packet["id"] ?? 0])
             return
         }
 
@@ -109,7 +132,7 @@ final class WebSocketHandler: ChannelInboundHandler {
             checkGeneration &+= 1
             scheduleFocusCheck(
                 delaySeconds: delaySeconds, clipboardChanged: clipboardChanged,
-                announceFocus: announceFocus, context: context, generation: checkGeneration
+                announceFocus: announceFocus, channel: channel, generation: checkGeneration
             )
         }
     }
@@ -123,8 +146,7 @@ final class WebSocketHandler: ChannelInboundHandler {
     // read happens off the event loop (see AirMouseCore.performFocusAndClipboardCheck) —
     // this only schedules the delay and sends the resulting state messages, never
     // gating or delaying any real control message (docs/adr/0004).
-    private func scheduleFocusCheck(delaySeconds: Double, clipboardChanged: Bool, announceFocus: Bool, context: ChannelHandlerContext, generation: UInt64) {
-        let channel = context.channel
+    private func scheduleFocusCheck(delaySeconds: Double, clipboardChanged: Bool, announceFocus: Bool, channel: Channel, generation: UInt64) {
         let eventLoop = channel.eventLoop
 
         eventLoop.scheduleTask(in: .milliseconds(Int64(delaySeconds * 1000))) { [weak self] in
@@ -148,8 +170,7 @@ final class WebSocketHandler: ChannelInboundHandler {
     /// the socket stays up and every message is still accepted. 2s is well
     /// inside the time it takes a user to switch back from System Settings and
     /// wonder why nothing works.
-    private func startPermissionReporting(context: ChannelHandlerContext) {
-        let channel = context.channel
+    private func startPermissionReporting(channel: Channel) {
         reportPermissionIfChanged(channel: channel)
         permissionTimer?.cancel()
         permissionTimer = channel.eventLoop.scheduleRepeatedTask(
@@ -166,8 +187,36 @@ final class WebSocketHandler: ChannelInboundHandler {
         sendJSONFrame(["type": "permission", "accessibility": granted], channel: channel)
     }
 
-    private func sendJSON(_ obj: [String: Any], context: ChannelHandlerContext) {
-        sendJSONFrame(obj, channel: context.channel)
+    /// Opens the DTLS/UDP channel and tells the client how to reach it.
+    ///
+    /// Strictly an upgrade. If the listener cannot be created, no offer is sent
+    /// and nothing else changes — the client is already working over the channel
+    /// this message is travelling on.
+    private func offerFastChannel(channel: Channel) {
+        fast?.stop()
+        let eventLoop = channel.eventLoop
+        let channelBox = channel
+        self.fast = FastChannel(handler: { [weak self] packet, reply in
+            // Onto the event loop, because InjectionSession is not thread-safe
+            // and — more importantly — because input arriving on two channels
+            // must still be applied in one order. A mouse-down racing a movement
+            // is a drag that starts in the wrong place.
+            eventLoop.execute {
+                self?.handlePacket(packet, channel: channelBox, reply: reply)
+            }
+        }, onReady: { fast in
+            logError("[Fast] DTLS/UDP on port \(fast.port) as \(fast.serviceName)")
+            sendJSONFrame([
+                "type": "fast_channel",
+                "port": fast.port,
+                "key": fast.key,
+                "identity": fast.identity,
+                "service": fast.serviceName,
+            ], channel: channelBox)
+        })
+        if fast == nil {
+            logError("[Fast] listener unavailable — staying on TCP")
+        }
     }
 }
 
