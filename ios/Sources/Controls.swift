@@ -41,8 +41,7 @@ struct ContextPills: View {
                 .font(.system(size: 14, weight: .medium))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+                .glassSurface(in: Capsule())
         }
         .foregroundStyle(.white)
     }
@@ -74,7 +73,8 @@ struct ShortcutBar: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            GlassGroup {
+              HStack(spacing: 8) {
                 ForEach(shortcuts) { shortcut in
                     Button {
                         send(.key(code: shortcut.code, modifiers: shortcut.modifiers))
@@ -86,14 +86,13 @@ struct ShortcutBar: View {
                             .frame(minWidth: 44)
                             .padding(.vertical, 9)
                             .padding(.horizontal, 6)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10)
-                                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+                            .glassSurface(in: RoundedRectangle(cornerRadius: 12))
                     }
                     .foregroundStyle(.white)
                 }
+              }
+              .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
         }
     }
 }
@@ -125,13 +124,13 @@ struct KeyboardBar: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(.ultraThinMaterial, in: Capsule())
+                .glassSurface(in: Capsule(), interactive: false)
+                // Dimmed when the Mac has no text field focused: a hint that
+                // this will go nowhere useful, never a block on sending
+                // (ADR-0004).
                 .overlay(Capsule().strokeBorder(
-                    // Dimmed when the Mac has no text field focused: a hint that
-                    // this will go nowhere useful, never a block on sending
-                    // (ADR-0004).
-                    macFieldFocused ? .white.opacity(0.35) : .white.opacity(0.10),
-                    lineWidth: 0.5))
+                    macFieldFocused ? .white.opacity(0.35) : .clear,
+                    lineWidth: 1))
                 // The single-argument form deliberately: the two-argument
                 // onChange is iOS 17+, and the deployment floor is 16 so the
                 // app still runs on an iPhone 8.
@@ -143,8 +142,8 @@ struct KeyboardBar: View {
             } label: {
                 Image(systemName: "keyboard.chevron.compact.down")
                     .font(.system(size: 18))
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Circle())
+                    .padding(12)
+                    .glassSurface(in: Circle())
             }
             .foregroundStyle(.white)
         }

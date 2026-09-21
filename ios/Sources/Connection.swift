@@ -56,11 +56,21 @@ final class Connection: NSObject, ObservableObject {
     /// continuing would overwrite a security verdict with a generic "couldn't
     /// reach" — hiding the one thing pinning exists to surface.
     private var identityRejected = false
+    /// The Mac to return to. Kept so a dropped connection — the phone locking,
+    /// the app backgrounding, Wi-Fi blinking — can be retried without making
+    /// the user pick it out of a list again.
+    private var currentMac: Discovery.Mac?
+    private var reconnect: Task<Void, Never>?
+    /// Set while the user is deliberately leaving, so teardown is not mistaken
+    /// for a drop worth retrying.
+    private var intentionallyClosed = false
 
     // MARK: - Lifecycle
 
     func connect(to mac: Discovery.Mac) {
         disconnect()
+        intentionallyClosed = false
+        currentMac = mac
         macName = mac.name
         state = .connecting
 
@@ -94,6 +104,7 @@ final class Connection: NSObject, ObservableObject {
             if await open(url: url, address: address) { return }
             if identityRejected { return }
         }
+        scheduleReconnect()
         state = .failed("Couldn't reach \(macName).\n\nTried: "
             + candidates.joined(separator: ", ")
             + " on port \(port).\n\nCheck that the phone and the Mac are on "
@@ -154,11 +165,55 @@ final class Connection: NSObject, ObservableObject {
     /// there is nothing to tear down, and `disconnect` would also clear the
     /// message the user is being asked to read.
     func reset() {
+        intentionallyClosed = true
+        cancelReconnect()
+        currentMac = nil
         state = .idle
+    }
+
+    /// Releases any button the Mac is holding on this connection's behalf.
+    ///
+    /// Sent on the way to the background, where the app stops getting touch
+    /// events entirely — including the `up` that would end a drag.
+    func releaseHeldInput() {
+        send(.click(button: .left, action: .up))
+    }
+
+    /// Reconnects to the Mac already chosen, if any. Called when the app comes
+    /// back to the foreground and after a drop.
+    func reconnectIfNeeded() {
+        guard !intentionallyClosed, let mac = currentMac else { return }
+        switch state {
+        case .connected, .connecting, .authenticating, .needsPIN:
+            return
+        case .idle, .failed, .identityChanged:
+            // identityChanged is excluded on purpose further down: retrying a
+            // rejected certificate would loop, and it needs a human decision.
+            guard state != .identityChanged else { return }
+            connect(to: mac)
+        }
+    }
+
+    private func scheduleReconnect() {
+        guard !intentionallyClosed, currentMac != nil else { return }
+        cancelReconnect()
+        reconnect = Task { [weak self] in
+            // Matches the web client's retry cadence. Long enough not to hammer
+            // a sleeping Mac, short enough that waking the phone feels instant.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.reconnectIfNeeded()
+        }
+    }
+
+    private func cancelReconnect() {
+        reconnect?.cancel()
+        reconnect = nil
     }
 
     func disconnect() {
         cancelAuthTimeout()
+        cancelReconnect()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         session?.invalidateAndCancel()
@@ -235,7 +290,15 @@ final class Connection: NSObject, ObservableObject {
                 case .failure(let error):
                     // A cancelled task is an ordinary disconnect, not a failure
                     // worth showing.
-                    if self.task != nil {
+                    guard self.task != nil else { return }
+                    if self.currentMac != nil, !self.intentionallyClosed {
+                        // Retry rather than stranding the user on an error
+                        // screen: this fires every time the phone locks, and
+                        // making them press Back and pick the Mac again for an
+                        // interruption they did not cause is the wrong answer.
+                        self.state = .connecting
+                        self.scheduleReconnect()
+                    } else {
                         self.state = .failed(error.localizedDescription)
                     }
                 }

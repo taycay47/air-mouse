@@ -24,7 +24,9 @@ struct TrackpadView: UIViewRepresentable {
         view.send = send
         view.haptics = haptics
         view.effects = effects
-        view.backgroundColor = .black
+        // Clear, not black: this sits on top of the dot grid in the ZStack,
+        // and an opaque background hides it completely.
+        view.backgroundColor = .clear
         view.isMultipleTouchEnabled = true
         return view
     }

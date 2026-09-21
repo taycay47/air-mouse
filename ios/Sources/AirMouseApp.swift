@@ -13,6 +13,7 @@ struct AirMouseApp: App {
 }
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var discovery = Discovery()
     @StateObject private var connection = Connection()
     @State private var haptics = Haptics()
@@ -46,6 +47,23 @@ struct ContentView: View {
         }
         .onAppear { discovery.start() }
         .onDisappear { discovery.stop() }
+        .onChange(of: scenePhase) { phase in
+            switch phase {
+            case .active:
+                // Coming back from the phone locking or the app being switched
+                // away from. The socket is gone; pick the same Mac up again
+                // rather than making the user choose it from a list for an
+                // interruption they did not cause.
+                discovery.start()
+                connection.reconnectIfNeeded()
+            case .background:
+                // Anything held must be released before the app stops running,
+                // or the Mac is left dragging (ADR-0006).
+                connection.releaseHeldInput()
+            default:
+                break
+            }
+        }
     }
 
     // MARK: - Picking a Mac
@@ -225,9 +243,8 @@ struct ContentView: View {
                         } label: {
                             Image(systemName: "keyboard")
                                 .font(.system(size: 18))
-                                .padding(11)
-                                .background(.ultraThinMaterial, in: Circle())
-                                .overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+                                .padding(12)
+                                .glassSurface(in: Circle())
                         }
                         .foregroundStyle(.white)
 
