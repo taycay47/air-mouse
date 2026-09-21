@@ -63,10 +63,13 @@ struct ContentView: View {
             ForEach(discovery.macs) { mac in
                 Button {
                     // host and port ride in the TXT record so a browse result
-                    // is enough to connect — no separate resolve step.
-                    connection.connect(to: mac,
-                                       host: mac.host ?? "\(mac.name).local",
-                                       port: mac.port ?? 8443)
+                    // is enough to connect — no separate resolve step. There is
+                    // deliberately no fallback to the instance name: that is a
+                    // display name ("MacBook Pro von Robert (2)"), not a
+                    // hostname, and spaces and parentheses make it unusable in a
+                    // URL. Guessing produced a confusing "bad address" instead
+                    // of naming the real problem.
+                    connection.connect(to: mac)
                 } label: {
                     HStack {
                         Image(systemName: "desktopcomputer")

@@ -47,8 +47,11 @@ final class Discovery: ObservableObject {
         // discovery without a second machine.
         parameters.includePeerToPeer = true
 
+        // bonjourWithTXTRecord, not plain .bonjour: the plain descriptor never
+        // populates Result.metadata, so every result arrives with no TXT at all
+        // and the host/port the server publishes are silently invisible.
         let browser = NWBrowser(
-            for: .bonjour(type: BonjourService.type, domain: nil),
+            for: .bonjourWithTXTRecord(type: BonjourService.type, domain: nil),
             using: parameters)
 
         browser.stateUpdateHandler = { [weak self] state in

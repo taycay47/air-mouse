@@ -1,0 +1,10 @@
+// Copy to ios/Local.xcconfig and fill in your team.
+//
+// Find it in Xcode → Settings → Accounts, or read it back out of the project
+// after picking a team once in Signing & Capabilities:
+//
+//   grep DEVELOPMENT_TEAM ios/AirMouse.xcodeproj/project.pbxproj
+//
+// Gitignored on purpose: this value is specific to one Apple ID and one
+// membership, so a committed one breaks the build for everybody else.
+DEVELOPMENT_TEAM = XXXXXXXXXX

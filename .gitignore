@@ -37,3 +37,6 @@ AirMouseKit/.build/
 # merge-conflict machine nobody edits by hand. Run `xcodegen generate` in ios/.
 ios/AirMouse.xcodeproj/
 ios/Info.plist
+
+# Per-developer signing config
+ios/Local.xcconfig

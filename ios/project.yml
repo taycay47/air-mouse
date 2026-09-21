@@ -29,6 +29,12 @@ targets:
     dependencies:
       - package: AirMouseKit
         product: AirMouseProtocol
+    # Local.xcconfig holds DEVELOPMENT_TEAM, which differs per developer and per
+    # membership — committing one makes the project unbuildable for anyone else.
+    # It is gitignored; see ios/Local.xcconfig.example.
+    configFiles:
+      Debug: Local.xcconfig
+      Release: Local.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.airmouse.remote
@@ -46,11 +52,11 @@ targets:
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
-        # Left empty so a free Personal Team is picked up automatically. Set
-        # DEVELOPMENT_TEAM in a local xcconfig or pass it to xcodebuild once a
-        # paid team exists — it must not be committed, since it differs per
-        # developer and per membership.
-        DEVELOPMENT_TEAM: ""
+        # DEVELOPMENT_TEAM is deliberately absent. It differs per developer and
+        # per membership, so committing one makes the project unbuildable for
+        # everyone else. Supply it at build time:
+        #   xcodebuild ... DEVELOPMENT_TEAM=XXXXXXXXXX -allowProvisioningUpdates
+        # or put it in ios/Local.xcconfig, which is gitignored.
     info:
       path: Info.plist
       properties:

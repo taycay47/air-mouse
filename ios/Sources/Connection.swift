@@ -42,21 +42,43 @@ final class Connection: NSObject, ObservableObject {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
+    /// Fails an authentication that never gets an answer. The socket can be
+    /// open — or believe it is — while the Mac is simply unreachable, and
+    /// without this the UI spins indefinitely with nothing to act on.
+    private var authTimeout: Task<Void, Never>?
+    private var lastAddress = ""
+
     // MARK: - Lifecycle
 
-    func connect(to mac: Discovery.Mac, host: String, port: Int) {
+    func connect(to mac: Discovery.Mac) {
         disconnect()
         macName = mac.name
         state = .connecting
 
+        // Both come from the service's TXT record. Their absence means the
+        // browse result carried no metadata, which is a discovery fault worth
+        // naming — not something to paper over by guessing a hostname from the
+        // display name.
+        guard let host = mac.host, let port = mac.port else {
+            state = .failed("\(mac.name) didn't publish an address. "
+                + "Restart Air Mouse on the Mac and try again.")
+            return
+        }
+
         guard let url = URL(string: "wss://\(host):\(port)") else {
-            state = .failed("Bad address for \(mac.name)")
+            state = .failed("Can't build an address from \(host):\(port)")
             return
         }
 
         // A delegate-backed session, because the certificate check is the whole
         // point and that only arrives through the delegate.
-        let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+        lastAddress = "\(host):\(port)"
+
+        let configuration = URLSessionConfiguration.ephemeral
+        // Without this the handshake to an unreachable host hangs for the
+        // default 60 seconds, which reads as a frozen app.
+        configuration.timeoutIntervalForRequest = 10
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         let task = session.webSocketTask(with: url)
         self.session = session
         self.task = task
@@ -67,6 +89,7 @@ final class Connection: NSObject, ObservableObject {
     }
 
     func disconnect() {
+        cancelAuthTimeout()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         session?.invalidateAndCancel()
@@ -86,10 +109,12 @@ final class Connection: NSObject, ObservableObject {
     // MARK: - Auth
 
     private func authenticate() {
-        state = .authenticating
         if let token = TokenStore.token(for: macName) {
+            state = .authenticating
             send(.auth(.token(token)))
+            armAuthTimeout()
         } else {
+            // Not a timed state: it waits on the user, not on the network.
             state = .needsPIN(message: nil)
         }
     }
@@ -97,6 +122,21 @@ final class Connection: NSObject, ObservableObject {
     func submit(pin: String) {
         state = .authenticating
         send(.auth(.pin(pin)))
+        armAuthTimeout()
+    }
+
+    private func armAuthTimeout() {
+        authTimeout?.cancel()
+        authTimeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            guard !Task.isCancelled, let self, case .authenticating = self.state else { return }
+            self.state = .failed("No answer from \(self.macName) at \(self.lastAddress). It was found on the network but can't be reached — usually that means the phone and the Mac are on different Wi-Fi networks.")
+        }
+    }
+
+    private func cancelAuthTimeout() {
+        authTimeout?.cancel()
+        authTimeout = nil
     }
 
     // MARK: - Sending
@@ -144,6 +184,7 @@ final class Connection: NSObject, ObservableObject {
 
         switch message {
         case .authOk(let token):
+            cancelAuthTimeout()
             // Issued on every successful auth, including token auth, so tokens
             // rotate. Always store the newest.
             TokenStore.save(token, for: macName)
@@ -154,6 +195,7 @@ final class Connection: NSObject, ObservableObject {
             state = .connected
 
         case .authFail(let reason):
+            cancelAuthTimeout()
             TokenStore.forget(macName)
             state = .needsPIN(message: reason == .rateLimited
                 ? "Too many attempts. Wait a moment and try again."
