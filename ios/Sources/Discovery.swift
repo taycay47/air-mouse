@@ -52,9 +52,15 @@ final class Discovery: ObservableObject {
     @Published private(set) var failure: String?
 
     private var browser: NWBrowser?
+    private var revival: Task<Void, Never>?
+    /// Grows with each consecutive failure, so a permission that is genuinely
+    /// switched off is not retried in a tight loop forever.
+    private var revivalDelay: UInt64 = 2
 
     func start() {
         guard browser == nil else { return }
+        revival?.cancel()
+        revival = nil
 
         let parameters = NWParameters()
         // Otherwise the browser will not see a server running on this same Mac
@@ -76,13 +82,19 @@ final class Discovery: ObservableObject {
                 case .ready:
                     self.isSearching = true
                     self.failure = nil
-                case .failed(let error):
+                    self.revivalDelay = 2
+                case .failed:
                     self.isSearching = false
                     // iOS reports a denied local-network permission as a browse
                     // failure, not as a permission error, so say the useful
                     // thing rather than the literal one.
-                    self.failure = "Can't search the local network. "
-                        + "Check Settings › Air Mouse › Local Network. (\(error))"
+                    self.failure = "local network"
+                    // And then try again. A failed NWBrowser never recovers on
+                    // its own, and `start()` returns early while one is still
+                    // held — so without this the app searches once, gives up
+                    // permanently, and only works again after a relaunch. Which
+                    // is exactly what it was doing.
+                    self.revive()
                 case .cancelled:
                     self.isSearching = false
                 default:
@@ -117,7 +129,24 @@ final class Discovery: ObservableObject {
         browser.start(queue: .main)
     }
 
+    /// Drops the dead browser and starts a new one after a growing delay.
+    private func revive() {
+        guard revival == nil else { return }
+        browser?.cancel()
+        browser = nil
+        let delay = revivalDelay
+        revivalDelay = min(revivalDelay * 2, 15)
+        revival = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.revival = nil
+            self?.start()
+        }
+    }
+
     func stop() {
+        revival?.cancel()
+        revival = nil
         browser?.cancel()
         browser = nil
         isSearching = false

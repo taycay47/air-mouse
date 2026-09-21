@@ -18,10 +18,13 @@ struct TrackpadView: UIViewRepresentable {
     let send: (ClientMessage) -> Void
     let haptics: Haptics
     let effects: SurfaceEffects
+    /// Anything on screen that a touch here should dismiss.
+    var onTouchDown: () -> Void = {}
 
     func makeUIView(context: Context) -> TouchSurface {
         let view = TouchSurface()
         view.send = send
+        view.onTouchDown = onTouchDown
         view.haptics = haptics
         view.effects = effects
         // Clear, not black: this sits on top of the dot grid in the ZStack,
@@ -33,6 +36,9 @@ struct TrackpadView: UIViewRepresentable {
 
     func updateUIView(_ view: TouchSurface, context: Context) {
         view.send = send
+        // Refreshed too: it closes over view state that changes, and a stale
+        // closure here would dismiss against a value from a previous render.
+        view.onTouchDown = onTouchDown
     }
 
     static func dismantleUIView(_ view: TouchSurface, coordinator: Coordinator) {
@@ -45,6 +51,7 @@ final class TouchSurface: UIView {
     var send: ((ClientMessage) -> Void)?
     var haptics: Haptics?
     var effects: SurfaceEffects?
+    var onTouchDown: () -> Void = {}
 
     private let engine = GestureEngine()
     private var displayLink: CADisplayLink?
@@ -98,6 +105,7 @@ final class TouchSurface: UIView {
     // MARK: - Touches
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onTouchDown()
         report(touches, moved: false)
         play(engine.touchesBegan(convert(touches),
                                  all: convert(active(in: event) ?? touches),

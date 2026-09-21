@@ -18,11 +18,14 @@ import AirMouseProtocol
 /// button, which a cross-fade cannot.
 struct ActionButton: View {
     @ObservedObject var settings: ActionSettings
+    /// Owned by the screen, not by this view: the touch surface closes the
+    /// panel too, and a panel that only its own button could dismiss stayed
+    /// open behind every gesture that followed.
+    @Binding var isOpen: Bool
     let send: (ClientMessage) -> Void
     let haptics: Haptics
     let onFired: () -> Void
 
-    @State private var isOpen = false
     @Namespace private var glass
 
     /// Three across, which is what the groupings are: system, transport,

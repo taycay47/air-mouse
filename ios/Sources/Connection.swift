@@ -156,8 +156,11 @@ final class Connection: ObservableObject {
             transport.onClose = { _ in settle(false) }
             transport.start()
 
+            // Short, because this is spent per address *per transport*: three
+            // candidates with two transports each is six of these, and a
+            // reconnect that walks all of them is a reconnect nobody waits for.
             Task {
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
                 settle(false)
             }
         }
@@ -217,14 +220,29 @@ final class Connection: ObservableObject {
     }
 
     private func scheduleReconnect() {
-        guard !intentionallyClosed, currentMac != nil else { return }
+        guard !intentionallyClosed, let mac = currentMac else { return }
         cancelReconnect()
         reconnect = Task { [weak self] in
             // Matches the web client's retry cadence. Long enough not to hammer
             // a sleeping Mac, short enough that waking the phone feels instant.
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled else { return }
-            self?.reconnectIfNeeded()
+            guard !Task.isCancelled, let self else { return }
+
+            // Deliberately *not* `reconnectIfNeeded`. This task exists because
+            // a reconnect is needed, and that method declines while the state
+            // is `.connecting` — which is precisely the state a dropped
+            // connection leaves behind. The retry fired, saw the state its own
+            // trigger had just set, and did nothing; three seconds later, the
+            // same. That closed loop is why the app sat on "Connecting"
+            // indefinitely and only relaunching it ever helped.
+            switch self.state {
+            case .connected:
+                return // came back on its own
+            case .needsPIN, .identityChanged:
+                return // waiting on a person, not on the network
+            case .idle, .connecting, .authenticating, .failed:
+                self.connect(to: mac)
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import QuartzCore
 import AirMouseProtocol
 
@@ -32,6 +33,11 @@ struct ContentView: View {
     @State private var typed = ""
     @State private var showKeyboard = false
     @State private var effects = SurfaceEffects()
+    @StateObject private var keyboardInset = KeyboardInset()
+    /// Held here rather than inside ActionButton so the touch surface can close
+    /// the panel. Tapping the trackpad is how you dismiss it — the alternative
+    /// was a panel that stayed open behind every subsequent gesture.
+    @State private var actionsOpen = false
     /// Which actions the panel offers. A stored arrangement today, an editable
     /// one later; the views already read it rather than a hardcoded list.
     @StateObject private var actions = ActionSettings()
@@ -41,7 +47,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            AmbientGlow(isOffline: isOffline)
+            AmbientGlow(isOffline: isOffline, bottomInset: keyboardInset.height)
             DotGrid(effects: effects, isOffline: isOffline)
 
             // Present in every state, connected or not. Touching a disconnected
@@ -50,21 +56,40 @@ struct ContentView: View {
             // `send` is harmlessly ignored until there is a socket.
             TrackpadView(send: { connection.send($0) },
                          haptics: haptics,
-                         effects: effects)
+                         effects: effects,
+                         onTouchDown: { actionsOpen = false })
                 .ignoresSafeArea()
 
             overlay
         }
-        .onAppear { discovery.start() }
-        .onDisappear { discovery.stop() }
+        .onAppear {
+            discovery.start()
+            // The phone must not dim or lock while this is on screen. It is a
+            // trackpad: long stretches of reading with a hand resting on it are
+            // the normal case, and they look exactly like idleness to iOS.
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear {
+            discovery.stop()
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
         .onChange(of: discovery.macs) { macs in autoConnect(macs) }
+        // `onChange` alone is not enough: after a failure the Mac list is often
+        // unchanged, so nothing fires and the app sits red forever with a Mac
+        // it can see and is not dialling. This is the second half of that fix
+        // — the first is Discovery reviving its own browser.
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            autoConnect(discovery.macs)
+        }
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
                 discovery.start()
                 connection.reconnectIfNeeded()
+                UIApplication.shared.isIdleTimerDisabled = true
             case .background:
                 connection.releaseHeldInput()
+                UIApplication.shared.isIdleTimerDisabled = false
             default:
                 break
             }
@@ -73,11 +98,25 @@ struct ContentView: View {
 
     /// Connects without being asked when there is exactly one Mac.
     ///
-    /// Choosing from a list of one is not a choice. The picker now appears only
+    /// Choosing from a list of one is not a choice. The picker appears only
     /// when there is genuinely something to pick between.
+    ///
+    /// `failed` counts as ready to try again, not as a resting place. It used
+    /// to be excluded, which quietly threw away the single best signal the app
+    /// gets: the Mac's Bonjour service reappearing means the server is *back*,
+    /// and it was being ignored in favour of waiting out a retry timer. That is
+    /// most of the difference between reconnecting in a second and reconnecting
+    /// in a minute.
     private func autoConnect(_ macs: [Discovery.Mac]) {
-        guard case .idle = connection.state, macs.count == 1 else { return }
-        connection.connect(to: macs[0])
+        guard macs.count == 1 else { return }
+        switch connection.state {
+        case .idle, .failed:
+            connection.connect(to: macs[0])
+        case .connecting, .authenticating, .connected, .needsPIN, .identityChanged:
+            // Mid-attempt, waiting on the user, or refusing a certificate.
+            // Restarting any of those makes things worse.
+            break
+        }
     }
 
     // MARK: - Layers
@@ -107,34 +146,47 @@ struct ContentView: View {
     // wall of text over an animation the user is meant to be reading.
 
     private var status: some View {
-        VStack {
+        VStack(spacing: 6) {
             Spacer()
             Text(statusText)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(offlineText)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+            if let statusHint {
+                // The only instruction left, and only for the only failure a
+                // person can act on from the phone. Quiet enough to ignore
+                // until it is the thing you need.
+                Text(statusHint)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(offlineText.opacity(0.55))
+            }
             Spacer().frame(height: 80)
         }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 40)
         .animation(.easeInOut(duration: 0.3), value: statusText)
     }
 
+    /// Two words at most.
+    ///
+    /// The grid is already saying this, in red, pulsing up the screen — the
+    /// text only names it. The old version explained the fix in two lines of
+    /// prose laid over an animation nobody could then look at.
     private var statusText: String {
-        // The only failure worth instructions: nothing else here can be fixed
-        // from the phone.
-        if discovery.failure != nil {
-            return "Turn on Local Network access\nin Settings › Air Mouse"
-        }
+        if discovery.failure != nil { return "No local network" }
         switch connection.state {
         case .connecting, .authenticating:
             return "Connecting"
         case .failed:
-            return "Can't reach your Mac"
+            return "Out of reach"
         case .idle where !discovery.macs.isEmpty:
             return "Connecting"
         default:
-            return "Looking for your Mac"
+            return "Searching"
         }
+    }
+
+    private var statusHint: String? {
+        discovery.failure != nil ? "Settings › Air Mouse" : nil
     }
 
     /// Salmon rather than white, matching the web client's offline palette: the
@@ -253,6 +305,7 @@ struct ContentView: View {
                              haptics: haptics)
 
                 ActionButton(settings: actions,
+                             isOpen: $actionsOpen,
                              send: { connection.send($0) },
                              haptics: haptics,
                              onFired: { effects.pulse(.success, at: CACurrentMediaTime()) })
