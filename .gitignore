@@ -29,3 +29,6 @@ menubar/*.dmg.zip
 *.p8
 eddsa_priv
 sparkle_private*.pem
+
+# Shared package build output
+AirMouseKit/.build/
