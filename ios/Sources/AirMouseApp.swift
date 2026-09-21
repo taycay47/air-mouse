@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 import AirMouseProtocol
 
 @main
@@ -16,6 +17,9 @@ struct ContentView: View {
     @StateObject private var connection = Connection()
     @State private var haptics = Haptics()
     @State private var pin = ""
+    @State private var typed = ""
+    @State private var showKeyboard = false
+    @State private var effects = SurfaceEffects()
 
     var body: some View {
         ZStack {
@@ -179,7 +183,15 @@ struct ContentView: View {
 
     private var trackpad: some View {
         ZStack(alignment: .top) {
-            TrackpadView(send: { connection.send($0) }, haptics: haptics)
+            // The grid sits behind the touch surface and takes no touches of
+            // its own — it is a status indicator, not a control. Its red tint
+            // *is* the disconnected state, which is why there is no status
+            // light anywhere in this interface.
+            DotGrid(effects: effects, isOffline: !connection.isLive)
+
+            TrackpadView(send: { connection.send($0) },
+                         haptics: haptics,
+                         effects: effects)
                 .ignoresSafeArea()
 
             if !connection.accessibilityGranted {
@@ -190,6 +202,44 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .background(.red.opacity(0.85))
             }
+
+            VStack {
+                Spacer()
+                ContextPills(hasSelection: connection.hasSelection,
+                             hasClipboard: connection.hasClipboard,
+                             send: { connection.send($0) },
+                             haptics: haptics)
+
+                if showKeyboard {
+                    KeyboardBar(text: $typed,
+                                macFieldFocused: connection.macFieldFocused,
+                                send: { connection.send($0) },
+                                haptics: haptics,
+                                onDone: { showKeyboard = false })
+                        .padding(.top, 10)
+                } else {
+                    HStack(spacing: 10) {
+                        Button {
+                            showKeyboard = true
+                            haptics.play(.tap)
+                        } label: {
+                            Image(systemName: "keyboard")
+                                .font(.system(size: 18))
+                                .padding(11)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+                        }
+                        .foregroundStyle(.white)
+
+                        ShortcutBar(send: { connection.send($0) },
+                                    haptics: haptics,
+                                    onFired: { effects.pulse(.success, at: CACurrentMediaTime()) })
+                    }
+                    .padding(.top, 10)
+                }
+            }
+            .padding(.bottom, 14)
+            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showKeyboard)
         }
     }
 }

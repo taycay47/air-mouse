@@ -29,6 +29,10 @@ final class Connection: NSObject, ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
+
+    /// Whether messages are actually reaching the Mac. Drives the grid's tint,
+    /// which is this interface's only connection indicator.
+    var isLive: Bool { state == .connected }
     @Published private(set) var accessibilityGranted = true
     @Published private(set) var macFieldFocused = false
     @Published private(set) var hasSelection = false
