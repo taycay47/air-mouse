@@ -98,16 +98,17 @@ final class TouchSurface: UIView {
     // MARK: - Touches
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        spawnRipples(for: touches)
+        report(touches, moved: false)
         play(engine.touchesBegan(convert(touches),
                                  all: convert(active(in: event) ?? touches),
                                  at: timestamp(touches, event)))
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Only while dragging something: a ripple under every move would light
-        // the whole grid continuously and stop meaning anything.
-        if engine.isButtonHeld { spawnRipples(for: touches) }
+        // Every move, not only while dragging: the grid throttles ripples by
+        // distance and time itself, and the glow that follows the finger needs
+        // its position continuously to exist at all.
+        report(touches, moved: true)
         play(engine.touchesMoved(convert(touches),
                                  all: convert(active(in: event) ?? touches),
                                  at: timestamp(touches, event)))
@@ -117,12 +118,14 @@ final class TouchSurface: UIView {
         let remaining = (active(in: event) ?? []).filter { touch in
             !touches.contains(touch)
         }
+        if remaining.isEmpty { effects?.touchUp() }
         play(engine.touchesEnded(convert(touches),
                                  remaining: convert(remaining),
                                  at: timestamp(touches, event)))
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        effects?.touchUp()
         play(engine.touchesCancelled(at: timestamp(touches, event)))
     }
 
@@ -152,11 +155,17 @@ final class TouchSurface: UIView {
         touches.first?.timestamp ?? event?.timestamp ?? CACurrentMediaTime()
     }
 
-    private func spawnRipples(for touches: Set<UITouch>) {
+    /// Feeds the grid simulation. Only the first touch drives the glow — with
+    /// two fingers down the midpoint would sit between them, glowing where
+    /// nothing is being touched.
+    private func report(_ touches: Set<UITouch>, moved: Bool) {
+        guard let touch = touches.min(by: { $0.timestamp < $1.timestamp }) else { return }
+        let point = touch.location(in: self)
         let now = CACurrentMediaTime()
-        for touch in touches {
-            let point = touch.location(in: self)
-            effects?.ripple(x: Double(point.x), y: Double(point.y), at: now)
+        if moved {
+            effects?.touchMoved(x: Double(point.x), y: Double(point.y), at: now)
+        } else {
+            effects?.touchDown(x: Double(point.x), y: Double(point.y), at: now)
         }
     }
 
