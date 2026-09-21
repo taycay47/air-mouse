@@ -85,6 +85,11 @@ final class TouchSurface: UIView {
     private func startTicking() {
         guard displayLink == nil else { return }
         let link = CADisplayLink(target: self, selector: #selector(tick))
+        // Ask for the display's real rate. On ProMotion this is the difference
+        // between momentum drawn 60 times a second and 120 — and the Info.plist
+        // key that unlocks it (CADisableMinimumFrameDurationOnPhone) is
+        // required as well, or this range is quietly clamped to 60.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
@@ -117,9 +122,94 @@ final class TouchSurface: UIView {
         // distance and time itself, and the glow that follows the finger needs
         // its position continuously to exist at all.
         report(touches, moved: true)
+
+        // One finger: replay every sample the digitiser actually took.
+        //
+        // UIKit delivers touchesMoved once per frame, but the screen samples
+        // far faster than it draws — up to 240Hz on ProMotion — and hands the
+        // intermediate samples over only if they are asked for. Reading one
+        // and discarding the rest throws away most of the movement's shape: a
+        // fast flick arrives as a single long jump, and the engine's speed
+        // estimate, which drives the whole acceleration curve, is computed from
+        // that one coarse delta.
+        //
+        // Deliberately single-touch. Coalesced samples are per touch and two
+        // fingers rarely have the same number, so replaying a multi-touch
+        // gesture means inventing an interleaving. Two-finger scroll is also
+        // heavily smoothed downstream, where this precision would not survive.
+        if let touch = touches.first,
+           touches.count == 1,
+           (active(in: event)?.count ?? 1) == 1,
+           let samples = event?.coalescedTouches(for: touch),
+           samples.count > 1 {
+            replay(samples, identifiedBy: touch)
+            return
+        }
+
         play(engine.touchesMoved(convert(touches),
                                  all: convert(active(in: event) ?? touches),
                                  at: timestamp(touches, event)))
+    }
+
+    /// Feeds each intermediate sample to the engine in order, with its own
+    /// timestamp.
+    ///
+    /// The identity comes from the *parent* touch, not the samples. Coalesced
+    /// touches are separate UITouch objects, so identifying them the usual way
+    /// would present every sample as a different finger arriving and leaving —
+    /// which is not a subtle failure, it is every gesture falling apart.
+    private func replay(_ samples: [UITouch], identifiedBy touch: UITouch) {
+        let id = ObjectIdentifier(touch).hashValue
+        var effects: [GestureEffect] = []
+        for sample in samples {
+            let point = sample.location(in: self)
+            let value = Touch(id: id, x: Double(point.x), y: Double(point.y))
+            effects += engine.touchesMoved([value], all: [value], at: sample.timestamp)
+        }
+        play(merged(effects))
+    }
+
+    /// Sums adjacent movement into one message per frame.
+    ///
+    /// Replaying four samples would otherwise send four packets where one used
+    /// to go — quadrupling the packet rate to win precision we have already
+    /// won, since the engine has *already* done its per-sample speed and
+    /// acceleration maths by the time these come back. Deltas add, and addition
+    /// commutes, so one summed message moves the cursor exactly as far as four
+    /// separate ones.
+    ///
+    /// Only adjacent runs are merged, and anything else flushes the
+    /// accumulator first: a button press between two movements must stay
+    /// between them, or a drag begins from the wrong place.
+    private func merged(_ effects: [GestureEffect]) -> [GestureEffect] {
+        var output: [GestureEffect] = []
+        var trackpad: (dx: Double, dy: Double)?
+        var scroll: (dx: Double, dy: Double)?
+
+        func flush() {
+            if let trackpad {
+                output.append(.send(.trackpad(dx: trackpad.dx, dy: trackpad.dy)))
+            }
+            if let scroll {
+                output.append(.send(.scroll(dx: scroll.dx, dy: scroll.dy)))
+            }
+            trackpad = nil
+            scroll = nil
+        }
+
+        for effect in effects {
+            switch effect {
+            case .send(.trackpad(let dx, let dy)):
+                trackpad = ((trackpad?.dx ?? 0) + dx, (trackpad?.dy ?? 0) + dy)
+            case .send(.scroll(let dx, let dy)):
+                scroll = ((scroll?.dx ?? 0) + dx, (scroll?.dy ?? 0) + dy)
+            default:
+                flush()
+                output.append(effect)
+            }
+        }
+        flush()
+        return output
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
