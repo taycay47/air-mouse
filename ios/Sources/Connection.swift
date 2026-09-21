@@ -47,6 +47,11 @@ final class Connection: NSObject, ObservableObject {
     /// without this the UI spins indefinitely with nothing to act on.
     private var authTimeout: Task<Void, Never>?
     private var lastAddress = ""
+    /// Set when a certificate fails the pin. Stops the address loop: every
+    /// address reaches the same Mac and would present the same certificate, and
+    /// continuing would overwrite a security verdict with a generic "couldn't
+    /// reach" — hiding the one thing pinning exists to surface.
+    private var identityRejected = false
 
     // MARK: - Lifecycle
 
@@ -79,13 +84,16 @@ final class Connection: NSObject, ObservableObject {
     /// parallel: a successful connection pins a certificate and consumes a PIN
     /// attempt, and racing several would do both more than once.
     private func attempt(candidates: [String], port: Int, macName: String) async {
+        identityRejected = false
         for address in candidates {
             guard let url = URL(string: "wss://\(address):\(port)") else { continue }
             if await open(url: url, address: address) { return }
+            if identityRejected { return }
         }
-        state = .failed("Couldn't reach \(macName) on any of its addresses "
-            + "(\(candidates.joined(separator: ", "))). "
-            + "Check that the phone and the Mac are on the same Wi-Fi.")
+        state = .failed("Couldn't reach \(macName).\n\nTried: "
+            + candidates.joined(separator: ", ")
+            + " on port \(port).\n\nCheck that the phone and the Mac are on "
+            + "the same Wi-Fi network.")
     }
 
     /// Opens one candidate and reports whether it got far enough to be worth
@@ -136,6 +144,13 @@ final class Connection: NSObject, ObservableObject {
 
         authenticate()
         return true
+    }
+
+    /// Returns to the picker from a failure, without tearing anything down —
+    /// there is nothing to tear down, and `disconnect` would also clear the
+    /// message the user is being asked to read.
+    func reset() {
+        state = .idle
     }
 
     func disconnect() {
@@ -308,6 +323,7 @@ extension Connection: URLSessionDelegate {
                 completionHandler(.useCredential, URLCredential(trust: trust))
 
             case .mismatch:
+                self.identityRejected = true
                 self.state = .identityChanged
                 completionHandler(.cancelAuthenticationChallenge, nil)
             }

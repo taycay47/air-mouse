@@ -78,8 +78,10 @@ final class WebSocketHandler: ChannelInboundHandler {
             guard type == "auth" else { return }
             let token = packet["token"] as? String
             let pin = packet["pin"] as? String
+            logError("auth attempt: token=\(token != nil), pin=\(pin != nil)")
             switch auth.attempt(token: token, pin: pin) {
             case .ok(let issuedToken):
+                logError("auth ok")
                 authenticated = true
                 // A newly authenticated connection means any button still held from a
                 // previous one is stale — the gesture that pressed it is definitively
@@ -89,8 +91,10 @@ final class WebSocketHandler: ChannelInboundHandler {
                 sendJSON(["type": "auth_ok", "token": issuedToken], context: context)
                 startPermissionReporting(context: context)
             case .failRateLimited:
+                logError("auth rate limited")
                 sendJSON(["type": "auth_fail", "reason": "rate_limited"], context: context)
             case .failInvalid:
+                logError("auth invalid")
                 sendJSON(["type": "auth_fail"], context: context)
             }
             return

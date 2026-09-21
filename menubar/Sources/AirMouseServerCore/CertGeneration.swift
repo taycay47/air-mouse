@@ -102,10 +102,20 @@ func runProcess(_ executable: String, _ arguments: [String]) throws -> (status: 
 /// The SAN entries the cert must carry, in a stable order so it can be compared
 /// against an existing cert without spurious regeneration.
 func desiredSANEntries(hostname: String, ipAddresses: [String]) -> [String] {
-    var entries = ["DNS:\(hostname)", "DNS:localhost"]
-    entries += ipAddresses.sorted().map { "IP:\($0)" }
-    entries.append("IP:127.0.0.1")
-    return entries
+    // Deliberately *not* the machine's IP addresses.
+    //
+    // Including them meant the certificate was regenerated every time the Mac
+    // moved network, because the SAN set no longer matched. A regenerated
+    // certificate breaks every native client's pin, so changing Wi-Fi forced a
+    // re-pair — and the client reported it as a connection failure rather than
+    // as the identity change it was.
+    //
+    // The name is what clients actually connect to: the QR code and the Bonjour
+    // record both carry <host>.local, which follows the Mac between networks.
+    // Pinning makes the IP case moot for the native client, which compares
+    // fingerprints and never checks names at all.
+    _ = ipAddresses
+    return ["DNS:\(hostname)", "DNS:localhost", "IP:127.0.0.1"]
 }
 
 /// Reads the SAN entries out of an existing cert, normalised to match

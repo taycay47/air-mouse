@@ -22,7 +22,13 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             switch connection.state {
-            case .idle, .connecting, .failed:
+            case .failed(let message):
+                // Its own screen, not a line inside the picker. Rendered there
+                // it was replaced the moment a Bonjour result changed, which
+                // happens constantly — the message flashed for an instant and
+                // vanished before it could be read.
+                failure(message)
+            case .idle, .connecting:
                 picker
             case .needsPIN(let message):
                 pinEntry(message: message)
@@ -84,13 +90,26 @@ struct ContentView: View {
                 .padding(.horizontal, 24)
             }
 
-            if case .failed(let message) = connection.state {
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-            }
+        }
+    }
+
+    // MARK: - Failure
+
+    private func failure(_ message: String) -> some View {
+        VStack(spacing: 18) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(.orange)
+            Text("Couldn't connect")
+                .font(.title3.bold())
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+                .padding(.horizontal, 28)
+            Button("Back") { connection.reset() }
+                .buttonStyle(.bordered)
         }
     }
 
