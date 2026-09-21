@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AirMouseProtocol
+import AirMouseGestures
 
 /// The touch surface.
 ///
@@ -10,10 +11,9 @@ import AirMouseProtocol
 /// equivalent, and it is the event that stops a held mouse button being
 /// stranded on the Mac when a call comes in mid-drag (ADR-0006).
 ///
-/// This is a deliberately plain first pass — pan, tap, two-finger scroll,
-/// long-press for right click. The web client's tuned acceleration, drag-lock,
-/// edge strips and momentum are not here yet; they belong in a tested,
-/// platform-agnostic gesture core rather than being re-improvised in a view.
+/// This view does no gesture reasoning of its own. It translates UIKit touches
+/// into `GestureEngine` input and plays back the effects — all the tuning lives
+/// in AirMouseKit, where it can be tested without a device.
 struct TrackpadView: UIViewRepresentable {
     let send: (ClientMessage) -> Void
     let haptics: Haptics
@@ -30,147 +30,127 @@ struct TrackpadView: UIViewRepresentable {
     func updateUIView(_ view: TouchSurface, context: Context) {
         view.send = send
     }
+
+    static func dismantleUIView(_ view: TouchSurface, coordinator: Coordinator) {
+        // The view going away must not leave the Mac holding a button.
+        view.releaseEverything()
+    }
 }
 
 final class TouchSurface: UIView {
     var send: ((ClientMessage) -> Void)?
     var haptics: Haptics?
 
-    private var lastPoint: CGPoint?
-    private var startPoint: CGPoint?
-    private var startTime: TimeInterval = 0
-    private var isScrolling = false
-    private var lastScrollPoint: CGPoint?
-    private var buttonIsDown = false
-    private var longPressTimer: Timer?
-    private var longPressFired = false
+    private let engine = GestureEngine()
+    private var displayLink: CADisplayLink?
 
-    private let tapMaxDuration: TimeInterval = 0.22
-    private let tapMaxDistance: CGFloat = 12
-    private let longPressDelay: TimeInterval = 0.5
-    private let longPressSlop: CGFloat = 10
-    /// Matches the web client's baseSensitivity so the two feel comparable
-    /// until the real acceleration curve is ported.
-    private let sensitivity: CGFloat = 1.3
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            stopTicking()
+            releaseEverything()
+        } else {
+            startTicking()
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // The engine locates the edge strips proportionally, so it needs the
+        // real size — and needs it again on rotation, which the protocol
+        // supports precisely so the phone can be held either way.
+        engine.surfaceWidth = Double(bounds.width)
+        engine.surfaceHeight = Double(bounds.height)
+    }
+
+    // MARK: - Ticking
+    //
+    // The long press, the drag pick-up and momentum scrolling all happen
+    // without any touch arriving, so something has to advance time. A display
+    // link rather than a Timer: momentum is drawn frame by frame, and matching
+    // the display's cadence is what stops it stuttering.
+
+    private func startTicking() {
+        guard displayLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    private func stopTicking() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        play(engine.tick(at: link.timestamp))
+    }
+
+    func releaseEverything() {
+        play(engine.releaseEverything())
+    }
 
     // MARK: - Touches
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        let all = event?.allTouches ?? touches
-        if all.count >= 2 {
-            cancelLongPress()
-            isScrolling = true
-            lastScrollPoint = midpoint(of: all)
-            return
-        }
-
-        guard let touch = touches.first else { return }
-        let point = touch.location(in: self)
-        startPoint = point
-        lastPoint = point
-        startTime = touch.timestamp
-        longPressFired = false
-
-        longPressTimer = Timer.scheduledTimer(withTimeInterval: longPressDelay, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.longPressFired = true
-                self.send?(.click(button: .right, action: .tap))
-                self.haptics?.play(.rightClick)
-            }
-        }
+        play(engine.touchesBegan(convert(touches),
+                                 all: convert(active(in: event) ?? touches),
+                                 at: timestamp(touches, event)))
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        let all = event?.allTouches ?? touches
-
-        if isScrolling, all.count >= 2 {
-            let point = midpoint(of: all)
-            if let last = lastScrollPoint {
-                let dx = point.x - last.x
-                let dy = point.y - last.y
-                if abs(dx) > 0.3 || abs(dy) > 0.3 {
-                    send?(.scroll(dx: Double(dx) * 0.35, dy: Double(dy) * 0.35))
-                    if abs(dy) > 6 || abs(dx) > 6 { haptics?.play(.scrollDetent) }
-                }
-            }
-            lastScrollPoint = point
-            return
-        }
-
-        guard let touch = touches.first, let last = lastPoint else { return }
-        let point = touch.location(in: self)
-
-        if let start = startPoint, hypot(point.x - start.x, point.y - start.y) > longPressSlop {
-            cancelLongPress()
-        }
-
-        let dx = point.x - last.x
-        let dy = point.y - last.y
-        lastPoint = point
-        send?(.trackpad(dx: Double(dx * sensitivity), dy: Double(dy * sensitivity)))
+        play(engine.touchesMoved(convert(touches),
+                                 all: convert(active(in: event) ?? touches),
+                                 at: timestamp(touches, event)))
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        cancelLongPress()
-
-        let remaining = (event?.allTouches ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }
-
-        if isScrolling {
-            if remaining.isEmpty { reset() }
-            return
+        let remaining = (active(in: event) ?? []).filter { touch in
+            !touches.contains(touch)
         }
-
-        if buttonIsDown {
-            send?(.click(button: .left, action: .up))
-            haptics?.play(.dragDrop)
-            buttonIsDown = false
-        } else if !longPressFired,
-                  let touch = touches.first,
-                  let start = startPoint,
-                  touch.timestamp - startTime < tapMaxDuration,
-                  hypot(touch.location(in: self).x - start.x,
-                        touch.location(in: self).y - start.y) < tapMaxDistance {
-            send?(.click(button: .left, action: .tap))
-            haptics?.play(.tap)
-        }
-
-        if remaining.isEmpty { reset() }
+        play(engine.touchesEnded(convert(touches),
+                                 remaining: convert(remaining),
+                                 at: timestamp(touches, event)))
     }
 
-    /// iOS cancels touches on interruption — an incoming call, a system edge
-    /// swipe, a notification. `touchesEnded` never fires in that case, so
-    /// without this the `up` matching a drag's `down` is never sent and the Mac
-    /// is left with the button held, dragging across everything the cursor
-    /// touches (ADR-0006).
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        cancelLongPress()
-        if buttonIsDown {
-            send?(.click(button: .left, action: .up))
-            buttonIsDown = false
-        }
-        reset()
+        play(engine.touchesCancelled(at: timestamp(touches, event)))
     }
 
     // MARK: - Helpers
 
-    private func midpoint(of touches: Set<UITouch>) -> CGPoint {
-        let points = touches.map { $0.location(in: self) }
-        let x = points.map(\.x).reduce(0, +) / CGFloat(points.count)
-        let y = points.map(\.y).reduce(0, +) / CGFloat(points.count)
-        return CGPoint(x: x, y: y)
+    /// Touches still down, excluding those already lifted or cancelled.
+    private func active(in event: UIEvent?) -> Set<UITouch>? {
+        guard let all = event?.allTouches else { return nil }
+        return all.filter { $0.phase != .ended && $0.phase != .cancelled }
     }
 
-    private func cancelLongPress() {
-        longPressTimer?.invalidate()
-        longPressTimer = nil
+    private func convert(_ touches: some Sequence<UITouch>) -> [Touch] {
+        touches.map { touch in
+            let point = touch.location(in: self)
+            // Identified by the object's address: UITouch instances are reused
+            // for the life of one finger's contact, which is exactly the
+            // identity the engine needs.
+            return Touch(id: ObjectIdentifier(touch).hashValue,
+                         x: Double(point.x), y: Double(point.y))
+        }
     }
 
-    private func reset() {
-        isScrolling = false
-        lastScrollPoint = nil
-        lastPoint = nil
-        startPoint = nil
-        longPressFired = false
+    /// UITouch timestamps share a clock with CADisplayLink, so the engine sees
+    /// one consistent timeline whether it is being advanced by a touch or by a
+    /// frame.
+    private func timestamp(_ touches: Set<UITouch>, _ event: UIEvent?) -> Double {
+        touches.first?.timestamp ?? event?.timestamp ?? CACurrentMediaTime()
+    }
+
+    private func play(_ effects: [GestureEffect]) {
+        for effect in effects {
+            switch effect {
+            case .send(let message):
+                send?(message)
+            case .haptic(let cue):
+                haptics?.play(cue)
+            }
+        }
     }
 }

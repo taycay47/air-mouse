@@ -1,5 +1,6 @@
 import CoreHaptics
 import UIKit
+import AirMouseGestures
 
 /// Gesture feedback through CoreHaptics.
 ///
@@ -14,45 +15,25 @@ final class Haptics {
     /// Sharpness separates a click from a thud; intensity separates a detent
     /// from a commitment. Values are tuned to be felt through a grip rather
     /// than only when the phone is resting on a table.
-    enum Feedback {
-        case tap
-        case rightClick
-        case dragPickUp
-        case dragDrop
-        case scrollDetent
-        case desktopSwitch
-        case failure
+    ///
+    /// Extends the engine's vocabulary rather than duplicating it: the engine
+    /// decides *that* something deserves feedback, this decides how it feels.
+    private struct Feedback {
+        let intensity: Float
+        let sharpness: Float
+        let isDouble: Bool
+    }
 
-        var intensity: Float {
-            switch self {
-            case .tap: return 0.55
-            case .rightClick: return 0.8
-            case .dragPickUp: return 1.0
-            case .dragDrop: return 0.7
-            case .scrollDetent: return 0.25
-            case .desktopSwitch: return 0.85
-            case .failure: return 0.9
-            }
-        }
-
-        var sharpness: Float {
-            switch self {
-            case .tap: return 0.8
-            case .rightClick: return 0.55
-            case .dragPickUp: return 0.35
-            case .dragDrop: return 0.5
-            case .scrollDetent: return 0.95
-            case .desktopSwitch: return 0.4
-            case .failure: return 0.2
-            }
-        }
-
-        /// A second tick, for the gestures that mean "two things happened".
-        var isDouble: Bool {
-            switch self {
-            case .rightClick, .desktopSwitch, .failure: return true
-            default: return false
-            }
+    private func feedback(for cue: HapticCue) -> Feedback {
+        switch cue {
+        case .tap:           return Feedback(intensity: 0.55, sharpness: 0.80, isDouble: false)
+        case .rightClick:    return Feedback(intensity: 0.80, sharpness: 0.55, isDouble: true)
+        case .dragPickUp:    return Feedback(intensity: 1.00, sharpness: 0.35, isDouble: false)
+        case .dragDrop:      return Feedback(intensity: 0.70, sharpness: 0.50, isDouble: false)
+        case .doubleTap:     return Feedback(intensity: 0.65, sharpness: 0.75, isDouble: true)
+        case .scrollDetent:  return Feedback(intensity: 0.25, sharpness: 0.95, isDouble: false)
+        case .desktopSwitch: return Feedback(intensity: 0.85, sharpness: 0.40, isDouble: true)
+        case .edgeEnter:     return Feedback(intensity: 0.30, sharpness: 0.70, isDouble: false)
         }
     }
 
@@ -84,8 +65,9 @@ final class Haptics {
         }
     }
 
-    func play(_ feedback: Feedback) {
+    func play(_ cue: HapticCue) {
         guard supported, let engine else { return }
+        let feedback = feedback(for: cue)
 
         var events = [CHHapticEvent(
             eventType: .hapticTransient,

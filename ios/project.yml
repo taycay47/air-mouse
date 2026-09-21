@@ -29,6 +29,8 @@ targets:
     dependencies:
       - package: AirMouseKit
         product: AirMouseProtocol
+      - package: AirMouseKit
+        product: AirMouseGestures
     # Local.xcconfig holds DEVELOPMENT_TEAM, which differs per developer and per
     # membership — committing one makes the project unbuildable for anyone else.
     # It is gitignored; see ios/Local.xcconfig.example.

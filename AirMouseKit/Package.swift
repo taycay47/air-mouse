@@ -10,9 +10,12 @@ let package = Package(
     platforms: [.macOS(.v13), .iOS(.v16)],
     products: [
         .library(name: "AirMouseProtocol", targets: ["AirMouseProtocol"]),
+        .library(name: "AirMouseGestures", targets: ["AirMouseGestures"]),
     ],
     targets: [
         .target(name: "AirMouseProtocol"),
+        .target(name: "AirMouseGestures", dependencies: ["AirMouseProtocol"]),
         .testTarget(name: "AirMouseProtocolTests", dependencies: ["AirMouseProtocol"]),
+        .testTarget(name: "AirMouseGesturesTests", dependencies: ["AirMouseGestures"]),
     ]
 )
