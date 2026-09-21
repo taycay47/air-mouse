@@ -250,21 +250,24 @@ struct ContentView: View {
                             onDone: { showKeyboard = false })
                     .padding(.top, 10)
             } else {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Button {
                         showKeyboard = true
                         haptics.play(.tap)
                     } label: {
-                        Image(systemName: "keyboard")
-                            .font(.system(size: 18))
-                            .padding(12)
-                            .glassSurface(in: Circle())
+                        // The chevron points up, because that is what the
+                        // button does. Its counterpart already pointed down.
+                        Image(systemName: "keyboard.chevron.compact.up")
+                            .font(.system(size: 18, weight: .medium))
+                            .frame(width: ControlMetrics.size,
+                                   height: ControlMetrics.size)
                     }
                     .foregroundStyle(.white)
+                    .glassSurface(in: Circle())
 
-                    ShortcutBar(send: { connection.send($0) },
-                                haptics: haptics,
-                                onFired: { effects.pulse(.success, at: CACurrentMediaTime()) })
+                    ActionButton(send: { connection.send($0) },
+                                 haptics: haptics,
+                                 onFired: { effects.pulse(.success, at: CACurrentMediaTime()) })
                 }
                 .padding(.top, 10)
             }

@@ -47,56 +47,6 @@ struct ContextPills: View {
     }
 }
 
-/// The shortcuts that are tedious on a phone keyboard and constant on a Mac.
-struct ShortcutBar: View {
-    let send: (ClientMessage) -> Void
-    let haptics: Haptics
-    let onFired: () -> Void
-
-    private struct Shortcut: Identifiable {
-        let id = UUID()
-        let label: String
-        let code: String
-        let modifiers: [KeyModifier]
-    }
-
-    private let shortcuts: [Shortcut] = [
-        .init(label: "⌘C", code: "c", modifiers: [.cmd]),
-        .init(label: "⌘V", code: "v", modifiers: [.cmd]),
-        .init(label: "⌘Z", code: "z", modifiers: [.cmd]),
-        .init(label: "⌘A", code: "a", modifiers: [.cmd]),
-        .init(label: "⌘Tab", code: "tab", modifiers: [.cmd]),
-        .init(label: "⎋", code: "escape", modifiers: []),
-        .init(label: "⏎", code: "enter", modifiers: []),
-        .init(label: "⌫", code: "backspace", modifiers: []),
-    ]
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            GlassGroup {
-              HStack(spacing: 8) {
-                ForEach(shortcuts) { shortcut in
-                    Button {
-                        send(.key(code: shortcut.code, modifiers: shortcut.modifiers))
-                        haptics.play(.tap)
-                        onFired()
-                    } label: {
-                        Text(shortcut.label)
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .frame(minWidth: 44)
-                            .padding(.vertical, 9)
-                            .padding(.horizontal, 6)
-                            .glassSurface(in: RoundedRectangle(cornerRadius: 12))
-                    }
-                    .foregroundStyle(.white)
-                }
-              }
-              .padding(.horizontal, 16)
-            }
-        }
-    }
-}
-
 /// Live keyboard passthrough.
 ///
 /// Every character goes to the Mac as it is typed, and the field keeps what was
@@ -122,8 +72,11 @@ struct KeyboardBar: View {
                 .autocorrectionDisabled()
                 .focused($isFocused)
                 .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 16)
+                // An explicit height rather than vertical padding, so the field
+                // and the button beside it are the same size. Padding around
+                // text of a different size never matches a fixed frame.
+                .frame(height: ControlMetrics.size)
                 .glassSurface(in: Capsule(), interactive: false)
                 // Dimmed when the Mac has no text field focused: a hint that
                 // this will go nowhere useful, never a block on sending
@@ -141,11 +94,11 @@ struct KeyboardBar: View {
                 onDone()
             } label: {
                 Image(systemName: "keyboard.chevron.compact.down")
-                    .font(.system(size: 18))
-                    .padding(12)
-                    .glassSurface(in: Circle())
+                    .font(.system(size: 18, weight: .medium))
+                    .frame(width: ControlMetrics.size, height: ControlMetrics.size)
             }
             .foregroundStyle(.white)
+            .glassSurface(in: Circle())
         }
         .padding(.horizontal, 16)
         .onAppear { isFocused = true }

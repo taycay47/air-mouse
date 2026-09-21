@@ -58,6 +58,11 @@ final class SurfaceEffects {
     static let restingDiameter: Double = 2.2
     /// How much a fully excited dot grows beyond its resting size.
     static let peakSizeGain: Double = 6.5
+    /// How far the resting grid fades toward the edges of the screen.
+    static let vignetteMargin: Double = 110
+    /// How dim the very corner gets. Not zero — the grid should recede at the
+    /// edges, not stop, or the surface acquires a visible border.
+    static let vignetteFloor: Double = 0.25
 
     // MARK: State
 
@@ -248,30 +253,34 @@ struct DotGrid: View {
                 let now = CACurrentMediaTime()
                 effects.resize(width: size.width, height: size.height)
                 effects.step(now: now, isOffline: isOffline)
-                draw(context: context)
+                draw(context: context, size: size)
             }
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
     }
 
-    private func draw(context: GraphicsContext) {
+    private func draw(context: GraphicsContext, size: CGSize) {
         let mix = effects.flashMix
         let flashColour = effects.flashColour
 
         effects.forEachDot { x, y, excitement in
+            // Applied to resting dots only. An excited dot keeps its full
+            // brightness wherever it is, so a ripple still reaches the edges
+            // intact — dimming those would make waves die before they arrive.
+            let vignette = restingVignette(x: x, y: y, size: size)
             // Resting dots are the overwhelming majority and get a cheap path
             // with no size maths and no randomness.
             if excitement < 0.008 {
                 let colour: Color
                 if mix > 0, let flashColour {
                     colour = Color(red: flashColour.x, green: flashColour.y, blue: flashColour.z)
-                        .opacity(SurfaceEffects.restingAlpha + 0.18 * mix)
+                        .opacity((SurfaceEffects.restingAlpha + 0.18 * mix) * vignette)
                 } else if isOffline {
                     colour = Color(red: 1, green: 88 / 255, blue: 78 / 255)
-                        .opacity(SurfaceEffects.restingAlphaOffline)
+                        .opacity(SurfaceEffects.restingAlphaOffline * vignette)
                 } else {
-                    colour = Color.white.opacity(SurfaceEffects.restingAlpha)
+                    colour = Color.white.opacity(SurfaceEffects.restingAlpha * vignette)
                 }
                 let r = SurfaceEffects.restingDiameter / 2
                 context.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r,
@@ -314,6 +323,24 @@ struct DotGrid: View {
             context.fill(Path(ellipseIn: rect),
                          with: .color(Color(red: red, green: green, blue: blue).opacity(alpha)))
         }
+    }
+}
+
+extension DotGrid {
+    /// Fades the resting grid toward the screen's edges.
+    ///
+    /// The two axes are multiplied rather than taken at their minimum, so the
+    /// corners — where both are falling — go darkest. Taking the minimum gives
+    /// a rectangular frame instead of a vignette.
+    func restingVignette(x: Double, y: Double, size: CGSize) -> Double {
+        let margin = SurfaceEffects.vignetteMargin
+        let horizontal = min(1, min(x, size.width - x) / margin)
+        let vertical = min(1, min(y, size.height - y) / margin)
+        let falloff = max(0, horizontal) * max(0, vertical)
+        // Eased, so the transition into the dim region is not a visible ring.
+        let eased = pow(falloff, 0.65)
+        return SurfaceEffects.vignetteFloor
+            + (1 - SurfaceEffects.vignetteFloor) * eased
     }
 }
 
