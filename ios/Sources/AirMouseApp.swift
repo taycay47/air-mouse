@@ -8,10 +8,21 @@ struct AirMouseApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(.dark)
+                .statusBarHidden()
         }
     }
 }
 
+/// One screen, always.
+///
+/// The grid is the interface. It is never swapped out for a picker, a spinner
+/// or an error page — it stays, and its colour and movement carry the state:
+/// white and calm when connected, red and pulsing from its centre when not.
+/// Everything else is a thin layer on top of it.
+///
+/// This replaces a conventional app built *around* the grid — a title screen, a
+/// device list, a full-page failure — which buried the one thing the app is for
+/// behind furniture nobody needed.
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var discovery = Discovery()
@@ -22,43 +33,34 @@ struct ContentView: View {
     @State private var showKeyboard = false
     @State private var effects = SurfaceEffects()
 
+    private var isOffline: Bool { !connection.isLive }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            AmbientGlow(isOffline: isOffline)
+            DotGrid(effects: effects, isOffline: isOffline)
 
-            switch connection.state {
-            case .failed(let message):
-                // Its own screen, not a line inside the picker. Rendered there
-                // it was replaced the moment a Bonjour result changed, which
-                // happens constantly — the message flashed for an instant and
-                // vanished before it could be read.
-                failure(message)
-            case .idle, .connecting:
-                picker
-            case .needsPIN(let message):
-                pinEntry(message: message)
-            case .identityChanged:
-                identityChanged
-            case .authenticating:
-                ProgressView().tint(.white)
-            case .connected:
-                trackpad
-            }
+            // Present in every state, connected or not. Touching a disconnected
+            // surface still ripples — the app stays alive while it works out
+            // what is wrong, where a dead rectangle would say the opposite.
+            // `send` is harmlessly ignored until there is a socket.
+            TrackpadView(send: { connection.send($0) },
+                         haptics: haptics,
+                         effects: effects)
+                .ignoresSafeArea()
+
+            overlay
         }
         .onAppear { discovery.start() }
         .onDisappear { discovery.stop() }
+        .onChange(of: discovery.macs) { macs in autoConnect(macs) }
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
-                // Coming back from the phone locking or the app being switched
-                // away from. The socket is gone; pick the same Mac up again
-                // rather than making the user choose it from a list for an
-                // interruption they did not cause.
                 discovery.start()
                 connection.reconnectIfNeeded()
             case .background:
-                // Anything held must be released before the app stops running,
-                // or the Mac is left dragging (ADR-0006).
                 connection.releaseHeldInput()
             default:
                 break
@@ -66,200 +68,208 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Picking a Mac
+    /// Connects without being asked when there is exactly one Mac.
+    ///
+    /// Choosing from a list of one is not a choice. The picker now appears only
+    /// when there is genuinely something to pick between.
+    private func autoConnect(_ macs: [Discovery.Mac]) {
+        guard case .idle = connection.state, macs.count == 1 else { return }
+        connection.connect(to: macs[0])
+    }
+
+    // MARK: - Layers
+
+    @ViewBuilder
+    private var overlay: some View {
+        switch connection.state {
+        case .connected:
+            controls
+        case .needsPIN(let message):
+            pinEntry(message: message)
+        case .identityChanged:
+            identityChanged
+        case .idle, .connecting, .authenticating, .failed:
+            if discovery.macs.count > 1 {
+                picker
+            } else {
+                status
+            }
+        }
+    }
+
+    // MARK: - Status
+    //
+    // One line, low and quiet. The grid already says "something is wrong", in
+    // red and pulsing from its centre; this only names it. Anything longer is a
+    // wall of text over an animation the user is meant to be reading.
+
+    private var status: some View {
+        VStack {
+            Spacer()
+            Text(statusText)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(offlineText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            Spacer().frame(height: 80)
+        }
+        .animation(.easeInOut(duration: 0.3), value: statusText)
+    }
+
+    private var statusText: String {
+        // The only failure worth instructions: nothing else here can be fixed
+        // from the phone.
+        if discovery.failure != nil {
+            return "Turn on Local Network access\nin Settings › Air Mouse"
+        }
+        switch connection.state {
+        case .connecting, .authenticating:
+            return "Connecting"
+        case .failed:
+            return "Can't reach your Mac"
+        case .idle where !discovery.macs.isEmpty:
+            return "Connecting"
+        default:
+            return "Looking for your Mac"
+        }
+    }
+
+    /// Salmon rather than white, matching the web client's offline palette: the
+    /// text belongs to the red state rather than sitting on top of it.
+    private var offlineText: Color {
+        Color(red: 1, green: 138 / 255, blue: 128 / 255).opacity(0.92)
+    }
+
+    // MARK: - Choosing, only when there is a choice
 
     private var picker: some View {
-        VStack(spacing: 20) {
-            Text("Air Mouse")
-                .font(.largeTitle.bold())
-
-            if let failure = discovery.failure {
-                Text(failure)
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-            } else if discovery.macs.isEmpty {
-                ProgressView().tint(.white)
-                Text("Looking for your Mac…")
-                    .foregroundStyle(.secondary)
-                Text("Both devices have to be on the same Wi-Fi.")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-            }
-
+        VStack(spacing: 10) {
+            Spacer()
             ForEach(discovery.macs) { mac in
-                Button {
-                    // host and port ride in the TXT record so a browse result
-                    // is enough to connect — no separate resolve step. There is
-                    // deliberately no fallback to the instance name: that is a
-                    // display name ("MacBook Pro von Robert (2)"), not a
-                    // hostname, and spaces and parentheses make it unusable in a
-                    // URL. Guessing produced a confusing "bad address" instead
-                    // of naming the real problem.
-                    connection.connect(to: mac)
-                } label: {
+                Button { connection.connect(to: mac) } label: {
                     HStack {
                         Image(systemName: "desktopcomputer")
                         Text(mac.name)
                         Spacer()
-                        Image(systemName: "chevron.right").foregroundStyle(.tertiary)
                     }
-                    .padding()
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
+                    .glassSurface(in: RoundedRectangle(cornerRadius: 14))
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 24)
             }
-
-        }
-    }
-
-    // MARK: - Failure
-
-    private func failure(_ message: String) -> some View {
-        VStack(spacing: 18) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.orange)
-            Text("Couldn't connect")
-                .font(.title3.bold())
-            Text(message)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-                .padding(.horizontal, 28)
-            Button("Back") { connection.reset() }
-                .buttonStyle(.bordered)
+            .padding(.horizontal, 28)
+            Spacer().frame(height: 70)
         }
     }
 
     // MARK: - Pairing
 
     private func pinEntry(message: String?) -> some View {
-        VStack(spacing: 16) {
-            Text("Enter the PIN")
-                .font(.title2.bold())
-            Text("Shown in the Air Mouse window on your Mac")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        VStack(spacing: 14) {
+            Spacer()
+            Text(message ?? "Enter the PIN from your Mac")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(message == nil ? Color.white.opacity(0.7) : offlineText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
 
             TextField("000000", text: $pin)
                 .keyboardType(.numberPad)
                 .multilineTextAlignment(.center)
-                .font(.system(.title, design: .monospaced))
-                .padding()
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal, 48)
-
-            if let message {
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-            }
-
-            Button("Pair") {
-                connection.submit(pin: pin)
-                pin = ""
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(pin.count != 6)
+                .font(.system(size: 28, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .frame(width: 180)
+                .padding(.vertical, 12)
+                .glassSurface(in: Capsule(), interactive: false)
+                .onChange(of: pin) { value in
+                    // Submits itself on the sixth digit. A Pair button is one
+                    // tap of ceremony after the only input that matters.
+                    let digits = value.filter(\.isNumber)
+                    if digits.count == 6 {
+                        connection.submit(pin: digits)
+                        haptics.play(.tap)
+                        pin = ""
+                    }
+                }
+            Spacer().frame(height: 90)
         }
     }
 
     // MARK: - Pinning refused
 
     private var identityChanged: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
+            Spacer()
             Image(systemName: "exclamationmark.shield.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(.orange)
-            Text("This Mac's identity changed")
-                .font(.title3.bold())
-            Text("""
-                The certificate is not the one this phone paired with. That \
-                happens legitimately when the Mac regenerates it — after a \
-                rename, a network change, or a year passing — but it is also \
-                what an impersonation would look like.
-
-                Only continue if you recognise the change.
-                """)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 34))
+                .foregroundStyle(offlineText)
+            Text("This Mac's certificate changed")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+            Text("It isn't the one this phone paired with. Expected if the Mac was renamed — otherwise worth a second look.")
+                .font(.system(size: 13))
+                .foregroundStyle(.white.opacity(0.6))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-
-            Button("Pair again", role: .destructive) { connection.acceptNewIdentity() }
-                .buttonStyle(.bordered)
+                .padding(.horizontal, 36)
+            Button("Pair again") { connection.acceptNewIdentity() }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .glassSurface(in: Capsule())
+            Spacer().frame(height: 80)
         }
     }
 
     // MARK: - Connected
 
-    private var trackpad: some View {
-        ZStack(alignment: .top) {
-            // The grid sits behind the touch surface and takes no touches of
-            // its own — it is a status indicator, not a control. Its red tint
-            // *is* the disconnected state, which is why there is no status
-            // light anywhere in this interface.
-            // Glow beneath the grid: the dots read as floating in it rather
-            // than sitting on top of a coloured panel.
-            AmbientGlow(isOffline: !connection.isLive)
-            DotGrid(effects: effects, isOffline: !connection.isLive)
-
-            TrackpadView(send: { connection.send($0) },
-                         haptics: haptics,
-                         effects: effects)
-                .ignoresSafeArea()
-
+    private var controls: some View {
+        VStack(spacing: 0) {
             if !connection.accessibilityGranted {
-                Text("Air Mouse can't control your Mac — Accessibility permission is off.")
-                    .font(.footnote)
-                    .foregroundStyle(.white)
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(.red.opacity(0.85))
+                Text("Accessibility is off — Air Mouse can't control your Mac")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(offlineText)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
             }
 
-            VStack {
-                Spacer()
-                ContextPills(hasSelection: connection.hasSelection,
-                             hasClipboard: connection.hasClipboard,
-                             send: { connection.send($0) },
-                             haptics: haptics)
+            Spacer()
 
-                if showKeyboard {
-                    KeyboardBar(text: $typed,
-                                macFieldFocused: connection.macFieldFocused,
-                                send: { connection.send($0) },
-                                haptics: haptics,
-                                onDone: { showKeyboard = false })
-                        .padding(.top, 10)
-                } else {
-                    HStack(spacing: 10) {
-                        Button {
-                            showKeyboard = true
-                            haptics.play(.tap)
-                        } label: {
-                            Image(systemName: "keyboard")
-                                .font(.system(size: 18))
-                                .padding(12)
-                                .glassSurface(in: Circle())
-                        }
-                        .foregroundStyle(.white)
+            ContextPills(hasSelection: connection.hasSelection,
+                         hasClipboard: connection.hasClipboard,
+                         send: { connection.send($0) },
+                         haptics: haptics)
 
-                        ShortcutBar(send: { connection.send($0) },
-                                    haptics: haptics,
-                                    onFired: { effects.pulse(.success, at: CACurrentMediaTime()) })
-                    }
+            if showKeyboard {
+                KeyboardBar(text: $typed,
+                            macFieldFocused: connection.macFieldFocused,
+                            send: { connection.send($0) },
+                            haptics: haptics,
+                            onDone: { showKeyboard = false })
                     .padding(.top, 10)
+            } else {
+                HStack(spacing: 10) {
+                    Button {
+                        showKeyboard = true
+                        haptics.play(.tap)
+                    } label: {
+                        Image(systemName: "keyboard")
+                            .font(.system(size: 18))
+                            .padding(12)
+                            .glassSurface(in: Circle())
+                    }
+                    .foregroundStyle(.white)
+
+                    ShortcutBar(send: { connection.send($0) },
+                                haptics: haptics,
+                                onFired: { effects.pulse(.success, at: CACurrentMediaTime()) })
                 }
+                .padding(.top, 10)
             }
-            .padding(.bottom, 14)
-            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showKeyboard)
         }
+        .padding(.bottom, 14)
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showKeyboard)
     }
 }

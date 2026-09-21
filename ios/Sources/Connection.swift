@@ -227,7 +227,12 @@ final class Connection: NSObject, ObservableObject {
     func acceptNewIdentity() {
         TrustStore.forget(macName)
         TokenStore.forget(macName)
+        identityRejected = false
         state = .idle
+        // Reconnects straight away rather than waiting for discovery to change:
+        // the Mac is already known, and nothing is going to change to trigger
+        // it now that there is no device list to return to.
+        reconnectIfNeeded()
     }
 
     // MARK: - Auth
