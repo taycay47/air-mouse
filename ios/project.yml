@@ -1,0 +1,68 @@
+# XcodeGen spec. Run `xcodegen generate` in this directory after editing.
+#
+# The .xcodeproj is generated, not committed: a pbxproj is a merge-conflict
+# machine that nobody edits by hand, and this file is the part worth reviewing.
+# It also means the project can be regenerated from a text diff rather than
+# repaired through the Xcode GUI.
+
+name: AirMouse
+options:
+  bundleIdPrefix: com.airmouse
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  # The gesture logic and wire types live here, not in the app target.
+  # SourceKit-LSP handles SwiftPM packages well and .xcodeproj targets poorly,
+  # so keeping the real work in the package is what makes this editable outside
+  # Xcode — and it is what lets that code be unit-tested without a device.
+  AirMouseKit:
+    path: ../AirMouseKit
+
+targets:
+  AirMouse:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: AirMouseKit
+        product: AirMouseProtocol
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.airmouse.remote
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # Portrait and landscape both: the protocol carries is_landscape
+        # precisely so the phone can be held either way.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: >-
+          UIInterfaceOrientationPortrait
+          UIInterfaceOrientationLandscapeLeft
+          UIInterfaceOrientationLandscapeRight
+        # The trackpad is the whole screen; a status bar over it is noise.
+        INFOPLIST_KEY_UIStatusBarHidden: YES
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        # Left empty so a free Personal Team is picked up automatically. Set
+        # DEVELOPMENT_TEAM in a local xcconfig or pass it to xcodebuild once a
+        # paid team exists — it must not be committed, since it differs per
+        # developer and per membership.
+        DEVELOPMENT_TEAM: ""
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Air Mouse
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # Both of these are required for Bonjour on iOS 14+, and their absence
+        # fails *silently*: without NSBonjourServices the browser simply never
+        # returns results, and without the usage description the local-network
+        # prompt never appears, so discovery looks broken rather than denied.
+        NSLocalNetworkUsageDescription: >-
+          Air Mouse finds your Mac on your local network. Nothing is sent
+          anywhere else.
+        NSBonjourServices:
+          - _airmouse._tcp

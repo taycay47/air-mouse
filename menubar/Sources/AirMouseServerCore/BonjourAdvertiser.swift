@@ -38,15 +38,28 @@ public final class BonjourAdvertiser {
     public func start(port: Int, name: String = "") -> Bool {
         stop()
 
-        // TXT records are unauthenticated — anything here is a hint for display,
-        // never something to make a trust decision on. The certificate is what
-        // establishes identity, not this.
+        // TXT records are unauthenticated — everything here is a hint, never
+        // something to make a trust decision on. A spoofed `host` cannot do
+        // harm: the client pins the certificate, and a certificate for the
+        // wrong machine fails that check.
+        //
+        // `host` and `port` are carried here so a client can build its URL
+        // straight from a browse result. The alternative is resolving the
+        // endpoint through a throwaway connection purely to read back the host
+        // and port, which is a lot of machinery for two strings the server
+        // already knows.
         var txt = TXTRecordRef()
         TXTRecordCreate(&txt, 0, nil)
         defer { TXTRecordDeallocate(&txt) }
-        _ = "1".withCString { value in
-            TXTRecordSetValue(&txt, "v", UInt8(strlen(value)), value)
+
+        func setTXT(_ key: String, _ value: String) {
+            _ = value.withCString { pointer in
+                TXTRecordSetValue(&txt, key, UInt8(strlen(pointer)), pointer)
+            }
         }
+        setTXT("v", "1")
+        setTXT("host", localHostname())
+        setTXT("port", String(port))
 
         var ref: DNSServiceRef?
         let status = DNSServiceRegister(
