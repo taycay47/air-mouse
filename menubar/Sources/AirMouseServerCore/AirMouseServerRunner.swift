@@ -68,6 +68,11 @@ public final class AirMouseServerRunner {
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
+                // Every accepted connection, with where it came from. Without
+                // this there is no way to tell "the phone cannot reach the Mac"
+                // apart from "the phone connects and then something fails" —
+                // they present identically at the client.
+                logError("connection from \(channel.remoteAddress?.description ?? "unknown")")
                 // configureHTTPServerPipeline only removes the HTTP handlers *it* installs on a
                 // successful upgrade — a handler appended afterward (httpHandler, for serving
                 // static files) is left dangling in the pipeline unless removed explicitly here,

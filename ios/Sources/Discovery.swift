@@ -23,10 +23,25 @@ final class Discovery: ObservableObject {
         /// what actually establishes identity.
         let host: String?
         let port: Int?
+        /// Every address the Mac answers on. Tried in order, because the one
+        /// name the Mac publishes does not reliably resolve to a route this
+        /// phone has — a tethered phone and a Wi-Fi phone reach it differently.
+        let addresses: [String]
         var id: String { name }
 
+        /// Numeric addresses first: they need no resolution and cannot resolve
+        /// to an interface the phone cannot reach. The hostname is the fallback,
+        /// since it is the only thing that still works if the Mac's address
+        /// changed since it was advertised.
+        var candidates: [String] {
+            var all = addresses
+            if let host, !all.contains(host) { all.append(host) }
+            return all
+        }
+
         static func == (lhs: Mac, rhs: Mac) -> Bool {
-            lhs.name == rhs.name && lhs.host == rhs.host && lhs.port == rhs.port
+            lhs.name == rhs.name && lhs.host == rhs.host
+                && lhs.port == rhs.port && lhs.addresses == rhs.addresses
         }
     }
 
@@ -82,11 +97,17 @@ final class Discovery: ObservableObject {
                     guard case let .service(name, _, _, _) = result.endpoint else { return nil }
                     var host: String?
                     var port: Int?
+                    var addresses: [String] = []
                     if case let .bonjour(txt) = result.metadata {
                         host = txt["host"]
                         port = txt["port"].flatMap(Int.init)
+                        addresses = (txt["addrs"] ?? "")
+                            .split(separator: ",")
+                            .map { String($0).trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
                     }
-                    return Mac(name: name, endpoint: result.endpoint, host: host, port: port)
+                    return Mac(name: name, endpoint: result.endpoint,
+                               host: host, port: port, addresses: addresses)
                 }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             }

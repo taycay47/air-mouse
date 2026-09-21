@@ -60,6 +60,12 @@ public final class BonjourAdvertiser {
         setTXT("v", "1")
         setTXT("host", localHostname())
         setTXT("port", String(port))
+        // Every address this Mac answers on, so the client can try them rather
+        // than depending on one name resolving to a route that exists. A phone
+        // on Wi-Fi and a phone tethered over USB reach this machine on entirely
+        // different addresses, and mDNS resolution of the hostname does not
+        // reliably pick the one the phone can actually route to.
+        setTXT("addrs", lanIPv4Addresses().joined(separator: ","))
 
         var ref: DNSServiceRef?
         let status = DNSServiceRegister(

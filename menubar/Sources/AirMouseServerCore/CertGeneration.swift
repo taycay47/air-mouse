@@ -48,9 +48,12 @@ public func localHostname() -> String {
     return name
 }
 
-/// Non-loopback IPv4 addresses, as a fallback for networks that block mDNS
-/// (client isolation, some corporate Wi-Fi). Listing them in the SAN costs
-/// nothing and means the IP URL also validates if the user has to fall back.
+/// Every non-loopback IPv4 address this Mac has.
+///
+/// Link-local (169.254.x) addresses are deliberately included. They look like
+/// "DHCP never completed" and were filtered out for exactly that reason — but a
+/// phone tethered over USB reaches the Mac on precisely such an address, and
+/// nothing else. Excluding them removed the only route a tethered phone had.
 public func lanIPv4Addresses() -> [String] {
     var addresses: [String] = []
     var head: UnsafeMutablePointer<ifaddrs>?
@@ -69,8 +72,6 @@ public func lanIPv4Addresses() -> [String] {
         guard result == 0 else { continue }
 
         let ip = String(cString: host)
-        // Link-local means DHCP never completed; it is not reachable from the phone.
-        if ip.hasPrefix("169.254.") { continue }
         if !addresses.contains(ip) { addresses.append(ip) }
     }
     return addresses

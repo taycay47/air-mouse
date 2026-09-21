@@ -8,6 +8,12 @@ is the contract the port must satisfy — not `mouse_controller.py`'s current
 implementation details. Where the two disagree, fix whichever is wrong, but
 decide deliberately.
 
+**Messages are sent as WebSocket _text_ frames**, in both directions. Binary
+frames are ignored by the server — silently, with no error and no close — so a
+client that sends them sees a connection that opens, accepts everything, and
+answers nothing. That is indistinguishable from an unreachable Mac, and it cost
+a long debugging session when the native client sent binary by default.
+
 Every message is a JSON object with a `type` field. Unknown `type` values must be
 ignored, not treated as errors — this is what allows one side to ship a new
 message before the other understands it.

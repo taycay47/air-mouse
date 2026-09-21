@@ -55,25 +55,46 @@ final class Connection: NSObject, ObservableObject {
         macName = mac.name
         state = .connecting
 
-        // Both come from the service's TXT record. Their absence means the
-        // browse result carried no metadata, which is a discovery fault worth
-        // naming — not something to paper over by guessing a hostname from the
-        // display name.
-        guard let host = mac.host, let port = mac.port else {
+        // Every address the Mac advertised, tried in order. Discovery finding a
+        // Mac does not mean this phone has a route to it: Bonjour travels over a
+        // USB link that carries no route to the Mac's Wi-Fi address, and the
+        // hostname resolves to whichever interface mDNS feels like naming.
+        //
+        // Trying raw addresses is only acceptable because of pinning. Ordinary
+        // TLS would reject an IP that does not match the certificate's names;
+        // here the certificate is compared by fingerprint, so which name was
+        // dialled is irrelevant.
+        let port = mac.port ?? 8443
+        let candidates = mac.candidates
+        guard !candidates.isEmpty else {
             state = .failed("\(mac.name) didn't publish an address. "
                 + "Restart Air Mouse on the Mac and try again.")
             return
         }
 
-        guard let url = URL(string: "wss://\(host):\(port)") else {
-            state = .failed("Can't build an address from \(host):\(port)")
-            return
+        Task { await attempt(candidates: candidates, port: port, macName: mac.name) }
+    }
+
+    /// Tries each address until one authenticates. Sequential rather than
+    /// parallel: a successful connection pins a certificate and consumes a PIN
+    /// attempt, and racing several would do both more than once.
+    private func attempt(candidates: [String], port: Int, macName: String) async {
+        for address in candidates {
+            guard let url = URL(string: "wss://\(address):\(port)") else { continue }
+            if await open(url: url, address: address) { return }
         }
+        state = .failed("Couldn't reach \(macName) on any of its addresses "
+            + "(\(candidates.joined(separator: ", "))). "
+            + "Check that the phone and the Mac are on the same Wi-Fi.")
+    }
+
+    /// Opens one candidate and reports whether it got far enough to be worth
+    /// keeping. Returns false quickly so the next address can be tried.
+    private func open(url: URL, address: String) async -> Bool {
+        lastAddress = "\(address):\(url.port ?? 8443)"
 
         // A delegate-backed session, because the certificate check is the whole
         // point and that only arrives through the delegate.
-        lastAddress = "\(host):\(port)"
-
         let configuration = URLSessionConfiguration.ephemeral
         // Without this the handshake to an unreachable host hangs for the
         // default 60 seconds, which reads as a frozen app.
@@ -85,7 +106,36 @@ final class Connection: NSObject, ObservableObject {
 
         task.resume()
         receive()
+
+        // A reachability probe, not the full handshake: send nothing, just see
+        // whether the socket comes up. `ping` completes only once the WebSocket
+        // is genuinely established, which is exactly the thing an unreachable
+        // address never does.
+        let reachable = await withCheckedContinuation { continuation in
+            var resumed = false
+            task.sendPing { error in
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: error == nil)
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: false)
+            }
+        }
+
+        guard reachable else {
+            task.cancel(with: .goingAway, reason: nil)
+            session.invalidateAndCancel()
+            self.task = nil
+            self.session = nil
+            return false
+        }
+
         authenticate()
+        return true
     }
 
     func disconnect() {
@@ -143,7 +193,12 @@ final class Connection: NSObject, ObservableObject {
 
     func send(_ message: ClientMessage) {
         guard let task, let data = try? encoder.encode(message) else { return }
-        task.send(.data(data)) { error in
+        // A *text* frame, not binary. The server reads only text opcodes, and
+        // discards binary ones silently — a client that sends binary gets no
+        // error, no close, and no reply, which is indistinguishable from an
+        // unreachable Mac. docs/PROTOCOL.md now states this explicitly.
+        guard let json = String(data: data, encoding: .utf8) else { return }
+        task.send(.string(json)) { error in
             if let error { NSLog("Air Mouse: send failed — \(error.localizedDescription)") }
         }
     }
