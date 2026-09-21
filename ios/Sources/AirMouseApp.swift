@@ -205,6 +205,9 @@ struct ContentView: View {
             // its own — it is a status indicator, not a control. Its red tint
             // *is* the disconnected state, which is why there is no status
             // light anywhere in this interface.
+            // Glow beneath the grid: the dots read as floating in it rather
+            // than sitting on top of a coloured panel.
+            AmbientGlow(isOffline: !connection.isLive)
             DotGrid(effects: effects, isOffline: !connection.isLive)
 
             TrackpadView(send: { connection.send($0) },

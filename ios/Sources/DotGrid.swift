@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 /// Shared, mutable state between the touch surface and the dot grid.
 ///
@@ -54,7 +55,14 @@ struct DotGrid: View {
     var body: some View {
         TimelineView(.animation) { timeline in
             Canvas { context, size in
-                let now = timeline.date.timeIntervalSinceReferenceDate
+                // CACurrentMediaTime, not the timeline's date. Ripples are
+                // stamped with the former (seconds since boot) and this read
+                // them as the latter (seconds since 2001), so every ripple
+                // looked eight hundred million seconds old and was discarded
+                // before it could be drawn. The redraw still comes from the
+                // timeline; only the clock is shared with the touch side.
+                _ = timeline.date
+                let now = CACurrentMediaTime()
                 effects.prune(now: now, lifetime: rippleMaxRadius / rippleSpeed)
                 draw(context: context, size: size, now: now)
             }
@@ -167,4 +175,47 @@ struct DotGrid: View {
 extension SIMD3<Double> {
     /// System green, the web client's success pulse.
     static let success = SIMD3<Double>(52 / 255, 199 / 255, 89 / 255)
+}
+
+/// The blue field rising from the bottom of the screen.
+///
+/// Ported from the web client's `#ambient-glow`. It is the only colour in an
+/// otherwise monochrome interface, and it is what stops the surface reading as
+/// an empty black rectangle — the dot grid alone is too sparse to give the
+/// screen a bottom.
+///
+/// Suppressed entirely while disconnected, so the red offline state reads
+/// unambiguously rather than fighting a blue wash for the same screen.
+struct AmbientGlow: View {
+    let isOffline: Bool
+
+    /// System blue, matching the web client's --accent.
+    private let accent = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255)
+
+    var body: some View {
+        GeometryReader { proxy in
+            // The gradient is wider than it is tall (135% × 105% in CSS) and
+            // centred just below the bottom edge, so what shows on screen is
+            // the top of a much larger ellipse rather than a circle sitting in
+            // the corner.
+            EllipticalGradient(
+                stops: [
+                    .init(color: accent.opacity(0.42), location: 0.00),
+                    .init(color: accent.opacity(0.24), location: 0.24),
+                    .init(color: accent.opacity(0.08), location: 0.50),
+                    .init(color: accent.opacity(0.00), location: 0.76),
+                ],
+                center: UnitPoint(x: 0.5, y: 0.96),
+                startRadiusFraction: 0,
+                endRadiusFraction: 0.85
+            )
+            .frame(width: proxy.size.width, height: proxy.size.height * 0.62)
+            .position(x: proxy.size.width / 2,
+                      y: proxy.size.height - (proxy.size.height * 0.62) / 2)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .opacity(isOffline ? 0 : 0.42)
+        .animation(.easeInOut(duration: 0.5), value: isOffline)
+    }
 }
