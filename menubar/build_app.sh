@@ -58,8 +58,10 @@ rm -f "$CONTENTS_DIR/Resources/web/"*.swift
 # Loose bundle resources — currently the menu bar mark, at both scales. Copied
 # as a directory rather than named individually so adding one is a matter of
 # putting the file there.
+# Files only: Resources also holds AirMouse.iconset, which is a build input
+# rather than something to ship inside the bundle.
 if [ -d "$SCRIPT_DIR/Resources" ]; then
-    cp "$SCRIPT_DIR/Resources/"* "$CONTENTS_DIR/Resources/" 2>/dev/null || true
+    find "$SCRIPT_DIR/Resources" -maxdepth 1 -type f -exec cp {} "$CONTENTS_DIR/Resources/" \;
 fi
 
 # The uninstaller, so the app's "Uninstall…" button and the terminal path run
@@ -96,7 +98,9 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$CONTENTS_DIR/Mac
 # that macOS 26 composites itself.
 ICON_SOURCE="$REPO_ROOT/ios/AirMouse.icon"
 ICON_COMPILED=0
-if [ -d "$ICON_SOURCE" ] && xcrun --find actool >/dev/null 2>&1; then
+# ICON_FORCE_FLAT=1 takes the fallback deliberately, which is the only way to
+# exercise on a developer's Mac the path every CI build actually takes.
+if [ "${ICON_FORCE_FLAT:-0}" != "1" ] && [ -d "$ICON_SOURCE" ] && xcrun --find actool >/dev/null 2>&1; then
     ICON_PARTIAL="$(mktemp)"
     if xcrun actool \
         --compile "$CONTENTS_DIR/Resources" \
@@ -111,15 +115,32 @@ if [ -d "$ICON_SOURCE" ] && xcrun --find actool >/dev/null 2>&1; then
     rm -f "$ICON_PARTIAL"
 fi
 
+# The fallback, and in practice the common path: a plain .icns built from the
+# checked-in iconset with iconutil, which is in the Command Line Tools and
+# therefore everywhere. It loses the layered appearances and nothing else.
+#
+# Needed because actool only understands the Icon Composer format from Xcode 26
+# on, and a runner pinned to an older Xcode fails outright rather than degrading
+# — which is how the first attempt at this release died.
+if [ "$ICON_COMPILED" != "1" ] && [ -d "$SCRIPT_DIR/Resources/AirMouse.iconset" ]; then
+    if iconutil -c icns "$SCRIPT_DIR/Resources/AirMouse.iconset" \
+        -o "$CONTENTS_DIR/Resources/AirMouse.icns" 2>/dev/null; then
+        ICON_COMPILED=1
+        echo "app icon: flat .icns (actool unavailable or too old for .icon)"
+    fi
+else
+    [ "$ICON_COMPILED" = "1" ] && echo "app icon: layered, via actool"
+fi
+
 if [ "$ICON_COMPILED" != "1" ]; then
     # Same posture as the universal-binary check below: a published build that
     # quietly lost something visible is worse than one that refuses to build.
     if [ "$REQUIRE_UNIVERSAL" = "1" ]; then
-        echo "error: could not compile the app icon, and this is a strict build." >&2
-        echo "       actool needs full Xcode; xcode-select -p => $(xcode-select -p 2>/dev/null || echo none)" >&2
+        echo "error: could not produce an app icon, and this is a strict build." >&2
+        echo "       neither actool nor iconutil produced one." >&2
         exit 1
     fi
-    echo "warning: no app icon — actool (full Xcode) not available."
+    echo "warning: no app icon."
 fi
 
 cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'

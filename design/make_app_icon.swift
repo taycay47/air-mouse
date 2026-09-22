@@ -214,6 +214,31 @@ for (scale, name) in [(CGFloat(1), "background.png"), (CGFloat(2), "background@2
     print("wrote menubar/dmg/\(name)")
 }
 
+// A classic iconset for the Mac app.
+//
+// The Mac bundle would rather have the Icon Composer .icon compiled by actool,
+// which yields the layered light/dark/tinted appearances macOS 26 composites
+// itself. But that needs Xcode 26, and a CI runner pinned to an older Xcode has
+// an actool that cannot read the format at all — which is exactly how the first
+// v0.2.0 release failed.
+//
+// So the same mark is also emitted as a plain iconset here. build_app.sh turns
+// it into an .icns with iconutil, which has shipped in the Command Line Tools
+// forever, and uses it whenever actool could not. The result is an app that
+// always has an icon, and a better one where the toolchain allows.
+let iconset = root.appendingPathComponent("menubar/Resources/AirMouse.iconset")
+try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
+// The sizes iconutil expects, spelled the way it expects them.
+for (points, scale) in [(16, 1), (16, 2), (32, 1), (32, 2),
+                        (128, 1), (128, 2), (256, 1), (256, 2),
+                        (512, 1), (512, 2)] {
+    guard let image = render(size: points * scale, opacity: 1.0) else { exit(1) }
+    let suffix = scale == 2 ? "@2x" : ""
+    let name = "icon_\(points)x\(points)\(suffix).png"
+    try write(image, to: iconset.appendingPathComponent(name))
+}
+print("wrote menubar/Resources/AirMouse.iconset (10 sizes)")
+
 // The menu bar mark.
 //
 // A *template* image: drawn in black with everything else transparent, and
