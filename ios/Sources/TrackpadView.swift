@@ -56,6 +56,11 @@ final class TouchSurface: UIView {
     private let engine = GestureEngine()
     private var displayLink: CADisplayLink?
 
+    /// iOS has three-finger gestures of its own — swipe to undo and redo, pinch
+    /// to copy and paste — and they claim exactly the touches this surface now
+    /// uses for desktops and Mission Control. Opting out keeps them ours.
+    override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil {
@@ -201,7 +206,10 @@ final class TouchSurface: UIView {
             switch effect {
             case .send(.trackpad(let dx, let dy)):
                 trackpad = ((trackpad?.dx ?? 0) + dx, (trackpad?.dy ?? 0) + dy)
-            case .send(.scroll(let dx, let dy)):
+            // Only unmodified scrolls merge. A ⌘-scroll is a zoom, and summing
+            // it with a plain scroll would turn two different gestures into one
+            // message that is neither.
+            case .send(.scroll(let dx, let dy, let modifiers)) where modifiers.isEmpty:
                 scroll = ((scroll?.dx ?? 0) + dx, (scroll?.dy ?? 0) + dy)
             default:
                 flush()

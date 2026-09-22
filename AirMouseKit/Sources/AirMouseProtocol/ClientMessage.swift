@@ -12,7 +12,12 @@ public enum ClientMessage: Equatable, Sendable {
     /// server must not apply its own curve (PROTOCOL.md invariant 1).
     case trackpad(dx: Double, dy: Double)
     case motion(Motion)
-    case scroll(dx: Double, dy: Double)
+    /// `modifiers` is what turns a scroll into a zoom: Figma, Canva, browsers
+    /// and most creative tools map ⌘-scroll to canvas zoom, and that is the
+    /// same path their own pinch-to-zoom takes. Posting a real
+    /// `NSEventTypeMagnify` is not possible with public API, so this is how a
+    /// pinch reaches them.
+    case scroll(dx: Double, dy: Double, modifiers: [KeyModifier] = [])
     case click(button: MouseButton, action: ClickAction)
     case key(code: String, modifiers: [KeyModifier])
     /// Literal text, typed verbatim. Deletion is never expressed here — the
@@ -101,9 +106,19 @@ extension ClientMessage: Codable {
                 dy: try container.decodeIfPresent(Double.self, forKey: .dy) ?? 0)
 
         case "scroll":
+            let raw = try container.decodeIfPresent([String].self, forKey: .modifiers) ?? []
+            let modifiers = raw.compactMap(KeyModifier.init(rawValue:))
+            // An unrecognised modifier invalidates the message, for the same
+            // reason it does on `key`: a zoom that silently arrives as a scroll
+            // is doing something different from what was asked.
+            guard modifiers.count == raw.count else {
+                self = .unknown(type: type)
+                return
+            }
             self = .scroll(
                 dx: try container.decodeIfPresent(Double.self, forKey: .dx) ?? 0,
-                dy: try container.decodeIfPresent(Double.self, forKey: .dy) ?? 0)
+                dy: try container.decodeIfPresent(Double.self, forKey: .dy) ?? 0,
+                modifiers: modifiers)
 
         case "motion":
             self = .motion(Motion(
@@ -175,10 +190,13 @@ extension ClientMessage: Codable {
             try container.encode(dx, forKey: .dx)
             try container.encode(dy, forKey: .dy)
 
-        case .scroll(let dx, let dy):
+        case .scroll(let dx, let dy, let modifiers):
             try container.encode("scroll", forKey: .type)
             try container.encode(dx, forKey: .dx)
             try container.encode(dy, forKey: .dy)
+            if !modifiers.isEmpty {
+                try container.encode(modifiers.map(\.rawValue), forKey: .modifiers)
+            }
 
         case .motion(let m):
             try container.encode("motion", forKey: .type)

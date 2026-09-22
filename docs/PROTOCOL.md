@@ -112,8 +112,34 @@ axes without the server knowing about device orientation.
 { "type": "scroll", "dx": 0.0, "dy": 18.5 }
 ```
 
+```json
+{ "type": "scroll", "dx": 0.0, "dy": 2.4, "modifiers": ["cmd"] }
+```
+
 Scroll deltas. Sign convention follows the client's "invert scroll" setting —
 the server scrolls exactly what it is told.
+
+`modifiers` is optional and takes the same values as `key`. Its purpose is
+zoom: Figma, Canva, browsers and most creative tools map ⌘-scroll to canvas
+zoom, and that is the same path their own pinch-to-zoom takes. Posting a real
+`NSEventTypeMagnify` is not possible with public API, so a pinch on the phone
+reaches them as ⌘-scroll.
+
+An unrecognised modifier invalidates the whole message, for the same reason it
+does on `key`: a zoom that silently arrives as a scroll is doing something
+different from what was asked.
+
+The values are in *line* units, which is what the client's curves were tuned
+against. The server converts them to pixels with a constant factor before
+posting (`AIRMOUSE_SCROLL_SCALE`, default 10) so it can send trackpad-class
+continuous scroll events rather than notched wheel ones. That is a unit
+conversion, not a curve — invariant 1 still holds, and the shape of the motion
+is entirely the client's.
+
+There is no scroll *phase* on the wire yet. Without one the server cannot mark
+a gesture as begun/changed/ended, so macOS will not rubber-band at a document's
+edges and cannot run momentum itself — the client synthesises its own and
+streams it as ordinary `scroll` messages.
 
 ### `click`
 
@@ -158,6 +184,7 @@ format stays one shape:
 | `playpause`, `nexttrack`, `previoustrack` | `NX_SYSDEFINED` event, subtype 8 | ignored |
 | `mute`, `volumeup`, `volumedown` | `NX_SYSDEFINED` event, subtype 8 | ignored |
 | `missioncontrol` | System Events, `⌃↑` | ignored |
+| `appexpose` | System Events, `⌃↓` | ignored |
 
 `missioncontrol` needs the Automation permission, for the same reason
 `switch_desktop` does: Mission Control drops synthetic modifier flags from a
@@ -185,6 +212,11 @@ dictation. Deletion is **not** expressed here — the client sends explicit
 ```json
 { "type": "switch_desktop", "direction": "left|right" }
 ```
+
+Sent by a three-finger swipe. As on a trackpad the desktops follow the fingers,
+so swiping *left* sends `right`: the desktop on the right slides in. (It was
+once a one-finger swipe from the left edge of the phone, which fired whenever
+someone reached for that side of the screen to move the cursor.)
 
 > **Port note:** implemented via `osascript` + System Events, *not* CGEvent.
 > Mission Control silently drops synthetic modifier flags from a non-HID source,
