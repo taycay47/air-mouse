@@ -93,5 +93,11 @@ func pressSystemKey(_ code: String) -> Bool {
         systemEventsKey(126, using: "control down", label: "MissionControl")
         return true
     }
+    if code == "appexpose" {
+        // Control+Down: every window of the frontmost app. The three-finger
+        // swipe down, as on a trackpad.
+        systemEventsKey(125, using: "control down", label: "AppExpose")
+        return true
+    }
     return false
 }

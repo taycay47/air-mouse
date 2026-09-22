@@ -102,7 +102,11 @@ public final class InjectionSession {
         case "scroll":
             let dy = numberField(packet, "dy")
             let dx = numberField(packet, "dx")
-            scrollMouse(dy: dy, dx: dx)
+            // Modifiers turn a scroll into a zoom in apps that map ⌘-scroll to
+            // one. Absent on an ordinary scroll, which is every message any
+            // older client has ever sent.
+            let scrollModifiers = (packet["modifiers"] as? [String]) ?? []
+            scrollMouse(dy: dy, dx: dx, modifiers: scrollModifiers)
 
         case "click":
             let button = stringField(packet, "button", default: "left")

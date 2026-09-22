@@ -78,22 +78,78 @@ func postMouseEvent(_ type: CGEventType, _ x: Double, _ y: Double, button: CGMou
 var scrollAccumX = 0.0
 var scrollAccumY = 0.0
 
-func scrollMouse(dy: Double, dx: Double) {
+/// How many pixels one unit of the client's scroll delta is worth.
+///
+/// The client's curves were tuned against *line* units, so its numbers mean
+/// "lines" and have to be converted to the pixels this now sends. macOS uses
+/// roughly this ratio internally when it converts a wheel notch to a distance.
+///
+/// This is a unit conversion, not a curve: the shape of the motion is still
+/// entirely the client's (PROTOCOL.md invariant 1). Overridable so the feel can
+/// be tuned by restarting the server rather than rebuilding the phone app:
+///
+///     AIRMOUSE_SCROLL_SCALE=6 AirMouseServer 8443
+let scrollPixelsPerUnit: Double = {
+    if let raw = ProcessInfo.processInfo.environment["AIRMOUSE_SCROLL_SCALE"],
+       let value = Double(raw), value > 0 {
+        return value
+    }
+    return 10.0
+}()
+
+// Scrolling as a trackpad does it, rather than as a mouse wheel.
+//
+// This used to post `.line` units with no phase and no continuity flag, which
+// is a *wheel* event as far as macOS is concerned — and apps deliberately
+// render wheel input as discrete notched steps, often animating each one. That
+// is most of why scrolling felt jagged: not coarse numbers, but the wrong class
+// of event entirely.
+//
+// Two changes. Pixel units, so the accumulator quantises to whole pixels rather
+// than whole lines — a stream of sub-line deltas used to truncate to 0, 0, 1,
+// 0, 1 and then get multiplied back up by ten. And the continuous flag, which
+// is what tells macOS this came from a device that scrolls smoothly.
+//
+// Still absent, deliberately, because it needs the client to say so: the scroll
+// *phase* (began/changed/ended). Without it there is no rubber-banding at a
+// document's edges and macOS cannot run momentum itself.
+func scrollMouse(dy: Double, dx: Double, modifiers: [String] = []) {
     if dy == 0 && dx == 0 { return }
 
-    scrollAccumX += dx
-    scrollAccumY += dy
+    scrollAccumX += dx * scrollPixelsPerUnit
+    scrollAccumY += dy * scrollPixelsPerUnit
 
     let intDx = Int32(scrollAccumX.rounded(.towardZero))
     let intDy = Int32(scrollAccumY.rounded(.towardZero))
 
     if intDx != 0 || intDy != 0 {
+        // Only the whole pixels are spent; the remainder stays for next time,
+        // which is what stops a slow drag from rounding away to nothing.
         scrollAccumX -= Double(intDx)
         scrollAccumY -= Double(intDy)
 
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
-        guard let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: intDy, wheel2: intDx, wheel3: 0) else { return }
+        guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: intDy, wheel2: intDx, wheel3: 0) else { return }
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        // What an app reads for pixel-accurate scrolling. Set explicitly rather
+        // than relying on the pixel units to populate it.
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(intDy))
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(intDx))
+        // ⌘-scroll is zoom in Figma, Canva, browsers and most creative tools —
+        // the same path their own pinch-to-zoom takes. A real magnify event
+        // (NSEventTypeMagnify) cannot be posted with public API at all, so this
+        // is how a pinch on the phone reaches them.
+        var flags: CGEventFlags = []
+        for name in modifiers {
+            if let flag = MODIFIER_FLAGS[name] { flags.insert(flag) }
+        }
+        // Assigned even when empty. An event built from the HID system state
+        // inherits whatever modifiers macOS believes are held — and after a
+        // ⌘-scroll it believes ⌘ is held (see releaseModifiers). A plain pan
+        // that merely *didn't set* flags went out as ⌘-scroll, which is a zoom.
+        event.flags = flags
         event.post(tap: .cghidEventTap)
+        if !flags.isEmpty { releaseModifiers(source: source) }
     }
 }
 
@@ -106,13 +162,34 @@ func pressKey(_ keycode: CGKeyCode, modifiers: [String]) {
     for name in modifiers {
         if let f = MODIFIER_FLAGS[name] { flags.insert(f) }
     }
-    if !flags.isEmpty {
-        down.flags = flags
-        up.flags = flags
-    }
+    // Explicit even when empty, so a plain key cannot inherit a modifier some
+    // earlier event left behind.
+    down.flags = flags
+    up.flags = flags
 
     down.post(tap: .cghidEventTap)
     up.post(tap: .cghidEventTap)
+    // Without this, ⌘C from the copy pill left ⌘ "held" too — the bug predates
+    // pinch-to-zoom, it just had nothing to make it visible.
+    if !flags.isEmpty { releaseModifiers(source: source) }
+}
+
+/// Tells macOS the modifiers are no longer held.
+///
+/// Posting an event that carries a modifier — a ⌘-scroll for a pinch, ⌘C from
+/// the copy pill — updates the system's own record of which modifiers are down,
+/// and nothing ever took it back. Every event built from the HID system state
+/// afterwards inherited the phantom ⌘: pans became zooms, clicks became
+/// ⌘-clicks. Verified directly: CGEventSource.flagsState reports ⌘ down after a
+/// single posted ⌘-scroll, and clear again after this.
+///
+/// A flags-changed event with no modifiers is what a real keyboard sends on
+/// releasing ⌘, so every app already understands it.
+func releaseModifiers(source: CGEventSource) {
+    guard let release = CGEvent(keyboardEventSource: source, virtualKey: 0x37, keyDown: false) else { return }
+    release.type = .flagsChanged
+    release.flags = []
+    release.post(tap: .cghidEventTap)
 }
 
 func typeString(_ text: String) {
@@ -121,6 +198,9 @@ func typeString(_ text: String) {
     for isDown in [true, false] {
         // virtual key 0 is 'a', a placeholder — overridden by keyboardSetUnicodeString below.
         guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: isDown) else { continue }
+        // Text is text. Inheriting a phantom ⌘ here would turn typing "q" into
+        // ⌘Q, which quits whatever is in front.
+        event.flags = []
         event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
         event.post(tap: .cghidEventTap)
     }
