@@ -16,9 +16,16 @@ VOLUME_NAME="Air Mouse"
 STAGING="$(mktemp -d)"
 WRITABLE="$(mktemp -d)/rw.dmg"
 MOUNTPOINT=""
+# Every step guarded, because this runs under `set -e` on the way out of a
+# *successful* build too. An unguarded "a && b" whose b fails — detaching a
+# volume that is already gone, which is the normal path — makes the list fail,
+# which aborts the trap, which becomes the script's exit status. The disk image
+# is built and correct and the build reports failure.
 cleanup() {
-    [ -n "$MOUNTPOINT" ] && hdiutil detach "$MOUNTPOINT" -quiet 2>/dev/null
-    rm -rf "$STAGING" "$(dirname "$WRITABLE")"
+    if [ -n "$MOUNTPOINT" ]; then
+        hdiutil detach "$MOUNTPOINT" -quiet 2>/dev/null || true
+    fi
+    rm -rf "$STAGING" "$(dirname "$WRITABLE")" 2>/dev/null || true
     return 0
 }
 trap cleanup EXIT
