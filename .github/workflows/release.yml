@@ -131,11 +131,17 @@ jobs:
           cd menubar
           ASSETS="AirMouse.dmg"
           [ -f appcast.xml ] && ASSETS="$ASSETS appcast.xml"
-          # --prerelease until there is a Developer ID: Gatekeeper refuses the
-          # first launch of an unsigned build, and labelling that as a finished
-          # release sets an expectation the download does not meet.
-          PRERELEASE=""
-          [ -z "$SIGN_IDENTITY" ] && PRERELEASE="--prerelease"
+          # A full release, never a prerelease — signed or not.
+          #
+          # Unsigned builds used to go out as prereleases, and that silently
+          # broke updates: the feed URL every installed copy polls is
+          # releases/latest/download/appcast.xml, and on GitHub "latest" means
+          # the newest release that is *not* a prerelease. With every release a
+          # prerelease there was no latest, the feed returned 404, and no
+          # installed copy could ever see an update. The notes below still tell
+          # people about the unverified-developer step while that applies.
+          UNSIGNED=""
+          [ -z "$SIGN_IDENTITY" ] && UNSIGNED="1"
 
           # Built in a file rather than inline: YAML's block scalar strips this
           # indentation before the shell sees it, so the heredoc lands at column
@@ -143,7 +149,7 @@ jobs:
           NOTES="$(mktemp)"
           {
             echo "SHA256 (AirMouse.dmg): ${{ steps.checksum.outputs.sha256 }}"
-            if [ -n "$PRERELEASE" ]; then
+            if [ -n "$UNSIGNED" ]; then
               echo
               echo "This build is **not signed with a Developer ID**. macOS refuses the"
               echo "first launch with \"Air Mouse cannot be opened because the developer"
@@ -161,6 +167,6 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             $ASSETS \
             --title "${{ github.ref_name }}" \
-            $PRERELEASE \
+            --latest \
             --generate-notes \
             --notes-file "$NOTES"
