@@ -37,7 +37,8 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
 
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Welcome to Air Mouse"
+        window.title = "Air Mouse"
+        window.titleVisibility = .hidden
         window.styleMask = [.titled, .closable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false

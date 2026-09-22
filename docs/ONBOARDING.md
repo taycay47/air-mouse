@@ -1,6 +1,6 @@
 # User onboarding
 
-The target: **download, grant one permission, scan a QR code.** Everything below
+The target: **download, grant one permission, enter a pairing code.** Everything below
 exists to protect that.
 
 ## Mac — first run (~60 seconds)
@@ -8,10 +8,13 @@ exists to protect that.
 1. Download `.dmg` → drag to Applications → open.
 2. A real window appears (not the menu bar popover — a popover is the wrong
    place for first-run).
-3. *"Air Mouse needs permission to control your Mac"* → one button →
+3. Two steps, one sentence each. **Allow control** → one button →
    `AXIsProcessTrusted(prompt:)` → System Settings opens at the right pane.
+   Restart and "not listed?" help appear only if the grant has not arrived
+   after a few seconds.
 4. The app **polls for the grant and advances by itself.**
-5. Server starts automatically; popover shows a large QR code and PIN.
+5. **Pair your phone**: the server starts and the pairing code is shown large.
+   Browser pairing (QR code, certificate note) is one link away, not on screen.
 
 ## Phone — first run (~30 seconds)
 

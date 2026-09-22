@@ -1,7 +1,9 @@
 # AirMouseBar
 
-A native macOS menu bar app for Air Mouse. Click the icon in the menu bar to
-start/stop the server and see the pairing QR code and PIN.
+A native macOS menu bar app for Air Mouse. Click the icon in the menu bar for a
+small glass panel: a switch for the server, the pairing code, and a QR code for
+pairing a browser. Everything rarer — updates, setup, uninstall, quit — sits
+behind the ⋯ button.
 
 ## What this is
 

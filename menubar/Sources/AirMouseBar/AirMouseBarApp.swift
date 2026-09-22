@@ -7,11 +7,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let permissions = PermissionsMonitor()
     let updater = UpdaterController()
     private var onboarding: OnboardingWindowController?
+    private var statusPanel: StatusPanelController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu bar utilities don't get a Dock icon or app switcher entry.
         // Onboarding flips this to .regular while its window is open.
         NSApp.setActivationPolicy(.accessory)
+
+        statusPanel = StatusPanelController(
+            server: server,
+            permissions: permissions,
+            updater: updater,
+            onShowSetup: { [weak self] in self?.showOnboarding() }
+        )
 
         let onboarding = OnboardingWindowController(server: server, permissions: permissions)
         onboarding.onFinished = { [weak self] in self?.finishOnboarding() }
@@ -62,22 +70,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// Plain AppKit entry point, not a SwiftUI `App`.
+///
+/// Everything this app shows is owned by the delegate — the status panel and
+/// the onboarding window — and a SwiftUI `App` insists on at least one scene
+/// of its own. The only one that shows nothing is `Settings`, and that one
+/// still appeared, as an empty "Air Mouse Settings" window, whenever the app
+/// was activated with no other window open.
 @main
-struct AirMouseBarApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+@MainActor
+enum AirMouseBarMain {
+    /// NSApplication holds its delegate weakly; this keeps it alive.
+    private static var delegate: AppDelegate?
 
-    var body: some Scene {
-        MenuBarExtra {
-            ContentView(
-                server: appDelegate.server,
-                permissions: appDelegate.permissions,
-                updater: appDelegate.updater,
-                onShowSetup: { appDelegate.showOnboarding() }
-            )
-        } label: {
-            Image(nsImage: MenuBarIcon.image)
-                .accessibilityLabel("Air Mouse")
-        }
-        .menuBarExtraStyle(.window)
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        self.delegate = delegate
+        app.delegate = delegate
+        app.run()
     }
 }

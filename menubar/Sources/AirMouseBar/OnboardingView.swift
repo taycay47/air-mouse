@@ -1,259 +1,191 @@
 import SwiftUI
 import AppKit
 
-/// First-run flow: explain, get Accessibility, then hand over the pairing details.
+/// First-run flow: get Accessibility, then show the PIN.
 ///
 /// The permission step advances by itself as soon as the grant lands
-/// (docs/ROADMAP.md step 3), and the pairing step coaches through the
-/// self-signed-certificate warning, which is otherwise the point where a
-/// first-time user assumes the app is broken.
+/// (docs/ROADMAP.md step 3). Everything that only matters when something goes
+/// wrong — restarting, adding the app by hand, pairing from a browser — stays
+/// out of sight until it is needed.
 struct OnboardingView: View {
     @ObservedObject var server: ServerManager
     @ObservedObject var permissions: PermissionsMonitor
     var onFinish: () -> Void
 
     private enum Step {
-        case welcome, accessibility, pairing
+        case access, pair
     }
 
-    @State private var step: Step = .welcome
+    @State private var step: Step = .access
+    @State private var requested = false
     /// Shown only after waiting a while, so the normal path stays uncluttered.
     @State private var showRestartHint = false
     @State private var waitTimer: Timer?
+    @State private var showBrowserPairing = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            content
-                .padding(28)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(spacing: 24) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 72, height: 72)
+
+            Group {
+                switch step {
+                case .access: access
+                case .pair: pair
+                }
+            }
+            .transition(.opacity)
+
+            StepDots(count: 2, current: step == .access ? 0 : 1)
         }
-        .frame(width: 460)
+        .padding(.horizontal, 36)
+        .padding(.top, 40)
+        .padding(.bottom, 24)
+        .frame(width: 380)
+        .animation(.easeOut(duration: 0.2), value: step)
+        .animation(.easeOut(duration: 0.2), value: showRestartHint)
+        .animation(.easeOut(duration: 0.2), value: showBrowserPairing)
         .onAppear {
             permissions.startPolling()
             // Coming back from a restart that was needed to pick up the grant:
             // don't make the user walk the whole flow again.
-            if permissions.isTrusted {
-                advanceToPairing()
-            } else if step == .accessibility {
-                startWaitTimer()
-            }
+            if permissions.isTrusted { advanceToPairing() }
         }
         .onDisappear {
             waitTimer?.invalidate()
             waitTimer = nil
         }
         .onChange(of: permissions.isTrusted) { trusted in
-            // Auto-advance the moment the grant appears.
-            if trusted && step == .accessibility {
-                advanceToPairing()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch step {
-        case .welcome:
-            welcome
-        case .accessibility:
-            accessibility
-        case .pairing:
-            pairing
+            if trusted && step == .access { advanceToPairing() }
         }
     }
 
     // MARK: - Steps
 
-    private var welcome: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Image(systemName: "cursorarrow.rays")
-                .font(.system(size: 40))
-                .foregroundStyle(.tint)
+    private var access: some View {
+        VStack(spacing: 18) {
+            heading("Allow control",
+                    "Turn on Air Mouse in the list macOS opens.")
 
-            Text("Use your phone as a trackpad")
-                .font(.title2).bold()
-
-            Text("Air Mouse runs a small server on this Mac. Your phone opens a web page over your local network — nothing to install on the phone, and nothing leaves your network.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Two things to set up: permission to control this Mac, then pairing your phone.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack {
-                Spacer()
-                Button("Continue") {
-                    step = permissions.isTrusted ? .pairing : .accessibility
-                    if permissions.isTrusted { startServerIfNeeded() }
+            if requested {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting…").foregroundStyle(.secondary)
                 }
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(.top, 6)
-        }
-    }
-
-    private var accessibility: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Image(systemName: permissions.isTrusted ? "checkmark.shield.fill" : "hand.raised.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(permissions.isTrusted ? AnyShapeStyle(.green) : AnyShapeStyle(.tint))
-
-            Text("Allow Air Mouse to control your Mac")
-                .font(.title2).bold()
-
-            Text("Moving the cursor and typing counts as controlling your Mac, so macOS requires you to grant Accessibility permission. It cannot be granted from inside the app.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 6) {
-                stepLine(1, "Click **Allow Access** below. macOS asks for confirmation.")
-                stepLine(2, "In that dialog, choose **Open System Settings**.")
-                stepLine(3, "Turn on the switch next to **Air Mouse**.")
-                stepLine(4, "Come back here. This window continues on its own.")
-            }
-            .padding(.vertical, 2)
-
-            HStack(spacing: 10) {
-                Button("Allow Access") {
+                .frame(height: 32)
+            } else {
+                Button {
                     // Deliberately does not also open System Settings: doing both in
                     // one action suppresses the macOS dialog, and that dialog is what
                     // registers the app so it appears in the list at all.
                     permissions.requestAccess()
+                    requested = true
                     startWaitTimer()
+                } label: {
+                    Text("Allow").frame(minWidth: 120)
                 }
+                .glassButtonStyle(prominent: true)
+                .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
-
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Waiting for permission…")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
             }
-            .padding(.top, 6)
 
             if showRestartHint {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Already turned it on?")
-                        .font(.callout).bold()
-                    Text("macOS sometimes won't hand a new permission to an app that's already running. Restarting picks it up — you'll land right back here.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Restart Air Mouse") { permissions.relaunch() }
-                        .controlSize(.small)
+                // macOS sometimes won't hand a new grant to a running process;
+                // and an app that never asked isn't listed at all.
+                HStack(spacing: 16) {
+                    Button("Already on? Restart") { permissions.relaunch() }
+                    Button("Not listed?") {
+                        permissions.openSystemSettings()
+                        permissions.revealInFinder()
+                    }
+                    .help("Drag Air Mouse into the Accessibility list")
                 }
-                .padding(8)
-                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
-            }
-
-            Divider().padding(.vertical, 2)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Don't see Air Mouse in the list?")
-                    .font(.callout).bold()
-                Text("macOS only lists apps that have asked. If it's still missing, add it by hand: click **+** in the Accessibility list and choose Air Mouse.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
-                    Button("Open System Settings") { permissions.openSystemSettings() }
-                        .controlSize(.small)
-                    Button("Reveal Air Mouse in Finder") { permissions.revealInFinder() }
-                        .controlSize(.small)
-                }
+                .buttonStyle(.link)
+                .font(.callout)
             }
         }
     }
 
-    private var pairing: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Pair your phone")
-                .font(.title2).bold()
+    private var pair: some View {
+        VStack(spacing: 18) {
+            heading("Pair your phone",
+                    "Open Air Mouse on your iPhone and enter this PIN.")
 
-            if let urlString = server.url, let pin = server.pin {
-                HStack(alignment: .top, spacing: 20) {
-                    if let qr = qrImage(for: urlString) {
-                        Image(nsImage: qr)
-                            .interpolation(.none)
-                            .resizable()
-                            .frame(width: 150, height: 150)
+            if let pin = server.pin {
+                PinCard(pin: pin, size: 32)
+
+                if showBrowserPairing, let url = server.url {
+                    VStack(spacing: 6) {
+                        BrowserPairing(url: url)
+                        Text("Safari warns about the certificate — that's expected.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        stepLine(1, "Scan this code with your phone's camera.")
-                        stepLine(2, "Safari will warn about the certificate. Tap **Show Details → Visit this Website**. It is expected: the connection is encrypted with a certificate this Mac generated for itself, which no public authority can vouch for.")
-                        stepLine(3, "Enter this PIN when the phone asks:")
-
-                        Text(pin)
-                            .font(.system(.title2, design: .monospaced)).bold()
-                            .textSelection(.enabled)
-                    }
+                } else {
+                    Button("No app? Use the browser") { showBrowserPairing = true }
+                        .buttonStyle(.link)
+                        .font(.callout)
                 }
-
-                Text(urlString)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-
-                Text("Both devices have to be on the same Wi-Fi network.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             } else {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(server.statusMessage)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(height: 150)
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(height: 80)
             }
 
-            HStack {
-                Text("Air Mouse lives in your menu bar from now on.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Done") { onFinish() }
-                    .keyboardShortcut(.defaultAction)
+            Button {
+                onFinish()
+            } label: {
+                Text("Done").frame(minWidth: 120)
             }
-            .padding(.top, 6)
+            .glassButtonStyle(prominent: true)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
         }
     }
 
     // MARK: - Helpers
 
+    private func heading(_ title: String, _ subtitle: String) -> some View {
+        VStack(spacing: 6) {
+            Text(title)
+                .font(.title2.weight(.semibold))
+            Text(subtitle)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func advanceToPairing() {
         waitTimer?.invalidate()
         waitTimer = nil
-        startServerIfNeeded()
-        step = .pairing
+        if !server.isRunning { server.start() }
+        step = .pair
     }
 
     private func startWaitTimer() {
         guard waitTimer == nil else { return }
-        let timer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { _ in
+        waitTimer = Timer.scheduledTimer(withTimeInterval: 6.0, repeats: false) { _ in
             Task { @MainActor in
                 if !permissions.isTrusted { showRestartHint = true }
             }
         }
-        waitTimer = timer
     }
+}
 
-    private func startServerIfNeeded() {
-        if !server.isRunning {
-            server.start()
-        }
-    }
+private struct StepDots: View {
+    let count: Int
+    let current: Int
 
-    private func stepLine(_ number: Int, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("\(number).")
-                .font(.callout).monospacedDigit()
-                .foregroundStyle(.secondary)
-            Text(.init(text))
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<count, id: \.self) { index in
+                Capsule()
+                    .fill(index == current ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary))
+                    .frame(width: index == current ? 16 : 6, height: 6)
+            }
         }
+        .accessibilityHidden(true)
     }
 }

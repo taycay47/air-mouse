@@ -58,15 +58,8 @@ enum Uninstaller {
         alert.alertStyle = .critical
         alert.messageText = "Uninstall Air Mouse?"
         alert.informativeText = """
-            This removes the app, its certificate and paired devices, its \
-            preferences, and its Accessibility and Automation permissions. \
-            Air Mouse will quit.
-
-            Your phone keeps its saved pairing until you clear Safari's website \
-            data for this Mac, and the Home Screen icon has to be deleted there \
-            by hand.
-
-            This cannot be undone.
+            Removes the app, its paired devices, preferences and permissions. \
+            This can't be undone.
             """
         // First button is the default; make the destructive one deliberate by
         // putting Cancel there instead.

@@ -26,7 +26,9 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: macos-14
+    # macOS 26, for its SDK: the Liquid Glass API only exists there. An older
+    # runner still builds (Glass.swift is guarded) but ships the plain look.
+    runs-on: macos-26
     # The `secrets` context is not available in a step's `if:` — using it there
     # makes the whole workflow file invalid, which GitHub reports as a run that
     # fails in 0s with no jobs rather than as a syntax error. Job-level `env`

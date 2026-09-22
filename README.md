@@ -12,7 +12,7 @@ resulting mouse, keyboard, and scroll events via CoreGraphics.
 - **`web/`** — the mobile web client (trackpad + air-mouse/gyro modes,
   scrolling, keyboard, dictation, macOS Zoom controls, keyboard shortcuts).
 - **`menubar/`** — a native Swift menu bar app that starts/stops the server and
-  shows the pairing QR code and PIN from a menu bar popover. Currently wraps
+  shows the pairing code (and a QR code for browsers) from a menu bar panel. Currently wraps
   the existing Python server rather than reimplementing input injection
   natively — see [`menubar/README.md`](menubar/README.md).
 - **`air-mouse/`** — a Raycast extension that does the same start/stop/QR job
