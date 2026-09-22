@@ -55,6 +55,13 @@ cp "$BIN_PATH" "$CONTENTS_DIR/MacOS/AirMouseBar"
 cp -R "$REPO_ROOT/web" "$CONTENTS_DIR/Resources/web"
 rm -f "$CONTENTS_DIR/Resources/web/"*.swift
 
+# Loose bundle resources — currently the menu bar mark, at both scales. Copied
+# as a directory rather than named individually so adding one is a matter of
+# putting the file there.
+if [ -d "$SCRIPT_DIR/Resources" ]; then
+    cp "$SCRIPT_DIR/Resources/"* "$CONTENTS_DIR/Resources/" 2>/dev/null || true
+fi
+
 # The uninstaller, so the app's "Uninstall…" button and the terminal path run
 # exactly the same script rather than two drifting definitions of "installed".
 cp "$SCRIPT_DIR/reset_install.sh" "$CONTENTS_DIR/Resources/reset_install.sh"
@@ -72,6 +79,48 @@ fi
 mkdir -p "$CONTENTS_DIR/Frameworks"
 cp -R "$SPARKLE_FRAMEWORK" "$CONTENTS_DIR/Frameworks/Sparkle.framework"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$CONTENTS_DIR/MacOS/AirMouseBar" 2>/dev/null || true
+
+# The app icon.
+#
+# There was none at all: no .icns, no CFBundleIcon key, so the app appeared as a
+# blank page everywhere it is ever seen. That matters more here than for an
+# ordinary app, because this one is LSUIElement and has no Dock presence — the
+# places it *does* appear are the DMG window, Finder, Login Items, Sparkle's
+# update sheet, and System Settings › Privacy & Security › Accessibility, which
+# every user has to find it in to make the app work at all.
+#
+# actool ships with full Xcode, not the Command Line Tools, which is why this
+# could not be done before. It compiles the same Icon Composer bundle the iOS
+# app uses, and emits two things: a classic .icns for everything that renders a
+# picture, and an Assets.car carrying the layered light/dark/tinted appearances
+# that macOS 26 composites itself.
+ICON_SOURCE="$REPO_ROOT/ios/AirMouse.icon"
+ICON_COMPILED=0
+if [ -d "$ICON_SOURCE" ] && xcrun --find actool >/dev/null 2>&1; then
+    ICON_PARTIAL="$(mktemp)"
+    if xcrun actool \
+        --compile "$CONTENTS_DIR/Resources" \
+        --platform macosx \
+        --minimum-deployment-target 13.0 \
+        --app-icon AirMouse \
+        --output-partial-info-plist "$ICON_PARTIAL" \
+        "$ICON_SOURCE" >/dev/null 2>&1 \
+        && [ -f "$CONTENTS_DIR/Resources/AirMouse.icns" ]; then
+        ICON_COMPILED=1
+    fi
+    rm -f "$ICON_PARTIAL"
+fi
+
+if [ "$ICON_COMPILED" != "1" ]; then
+    # Same posture as the universal-binary check below: a published build that
+    # quietly lost something visible is worse than one that refuses to build.
+    if [ "$REQUIRE_UNIVERSAL" = "1" ]; then
+        echo "error: could not compile the app icon, and this is a strict build." >&2
+        echo "       actool needs full Xcode; xcode-select -p => $(xcode-select -p 2>/dev/null || echo none)" >&2
+        exit 1
+    fi
+    echo "warning: no app icon — actool (full Xcode) not available."
+fi
 
 cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -92,6 +141,10 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <string>APPL</string>
     <key>LSUIElement</key>
     <true/>
+    <key>CFBundleIconFile</key>
+    <string>AirMouse</string>
+    <key>CFBundleIconName</key>
+    <string>AirMouse</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSAppleEventsUsageDescription</key>
@@ -121,6 +174,13 @@ APP_VERSION="${APP_VERSION:-0.0.0}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS_DIR/Info.plist"
 
+if [ "$ICON_COMPILED" != "1" ]; then
+    # Pointing at an icon that is not there makes Finder fall back anyway, but
+    # leaves a bundle that lies about itself.
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIconFile" "$CONTENTS_DIR/Info.plist" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$CONTENTS_DIR/Info.plist" 2>/dev/null || true
+fi
+
 FEED_URL="${SU_FEED_URL:-https://github.com/taycay47/air-mouse/releases/latest/download/appcast.xml}"
 # Not a secret: it ships in every copy of the app. Its whole job is to let the app
 # reject an update that wasn't signed with the matching private key. Hardcoded so
@@ -133,6 +193,17 @@ else
     # No key yet: strip the placeholder rather than ship a bogus one.
     /usr/libexec/PlistBuddy -c "Delete :SUPublicEDKey" "$CONTENTS_DIR/Info.plist"
     echo "note: SU_PUBLIC_ED_KEY unset — updates will not be verifiable until it is."
+fi
+
+# Debug symbols, which a downloaded build has no use for: nothing here
+# symbolicates a crash from a stripped binary any worse than from an unstripped
+# one without the matching dSYM, and this halves the executable — about 10MB of
+# a 23MB binary, before compression, in every copy anybody downloads.
+#
+# Release only, and strictly before signing: a signature covers the bytes of the
+# binary, so stripping afterwards invalidates it.
+if [ "$CONFIG" = "release" ]; then
+    strip -x "$CONTENTS_DIR/MacOS/AirMouseBar" 2>/dev/null || true
 fi
 
 # Signing.

@@ -67,13 +67,16 @@ struct AirMouseBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("Air Mouse", systemImage: "cursorarrow.rays") {
+        MenuBarExtra {
             ContentView(
                 server: appDelegate.server,
                 permissions: appDelegate.permissions,
                 updater: appDelegate.updater,
                 onShowSetup: { appDelegate.showOnboarding() }
             )
+        } label: {
+            Image(nsImage: MenuBarIcon.image)
+                .accessibilityLabel("Air Mouse")
         }
         .menuBarExtraStyle(.window)
     }

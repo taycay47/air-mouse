@@ -118,3 +118,158 @@ for size in [180, 192, 512, 1024] {
     try write(image, to: webIcons.appendingPathComponent("icon-\(size).png"))
     print("wrote web/icons/icon-\(size).png")
 }
+
+// The disk image's backdrop, from the same path as everything above — which is
+// the reason it lives in this script rather than beside make_dmg.sh. A second
+// transcription of the mark is a second thing to forget to update.
+//
+// It echoes the app deliberately: black, with the same blue glow rising from
+// the bottom that the phone client has behind its dot grid. Opening the DMG
+// should look like the beginning of the app, not like a generic installer.
+
+/// Finder's window, in points. The icons sit at (170, 200) and (490, 200)
+/// measured from the top left, which make_dmg.sh sets to match.
+let dmgSize = CGSize(width: 660, height: 420)
+let iconRowFromTop: CGFloat = 200
+
+func renderBackground(scale: CGFloat) -> CGImage? {
+    let width = Int(dmgSize.width * scale)
+    let height = Int(dmgSize.height * scale)
+    guard let context = CGContext(
+        data: nil, width: width, height: height,
+        bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+    ) else { return nil }
+
+    context.scaleBy(x: scale, y: scale)
+    context.setFillColor(gray: 0, alpha: 1)
+    context.fill(CGRect(origin: .zero, size: dmgSize))
+
+    // The ambient glow, centred below the bottom edge so only its top shows —
+    // the same construction as AmbientGlow in the iOS client.
+    let accent = CGColor(red: 10 / 255, green: 132 / 255, blue: 255 / 255, alpha: 1)
+    if let space = CGColorSpace(name: CGColorSpace.sRGB),
+       let gradient = CGGradient(
+        colorsSpace: space,
+        colors: [
+            accent.copy(alpha: 0.30)!, accent.copy(alpha: 0.16)!,
+            accent.copy(alpha: 0.05)!, accent.copy(alpha: 0.00)!,
+        ] as CFArray,
+        locations: [0.0, 0.24, 0.50, 0.78]) {
+        context.saveGState()
+        // Wider than tall, so what shows is the top of a large ellipse rather
+        // than a circle sitting in the corner.
+        context.translateBy(x: dmgSize.width / 2, y: 0)
+        context.scaleBy(x: 1.6, y: 1.0)
+        context.drawRadialGradient(
+            gradient,
+            startCenter: .zero, startRadius: 0,
+            endCenter: .zero, endRadius: dmgSize.height * 0.85,
+            options: [])
+        context.restoreGState()
+    }
+
+    // The mark, small, above the icons.
+    let markHeight: CGFloat = 40
+    let markScale = markHeight / artboard.height
+    let markWidth = artboard.width * markScale
+    context.saveGState()
+    context.translateBy(x: (dmgSize.width - markWidth) / 2,
+                        y: dmgSize.height - 54 - markHeight)
+    context.scaleBy(x: markScale, y: markScale)
+    context.translateBy(x: 0, y: artboard.height)
+    context.scaleBy(x: 1, y: -1)
+    context.addPath(logoPath())
+    context.setStrokeColor(red: 1, green: 1, blue: 1, alpha: 0.82)
+    context.setLineWidth(strokeWidth)
+    context.setLineCap(.round)
+    context.setLineJoin(.round)
+    context.strokePath()
+    context.restoreGState()
+
+    // An arrow between the two icons, saying what to do without a word of text.
+    // Flipped into Core Graphics' bottom-left origin from Finder's top-left one.
+    let arrowY = dmgSize.height - iconRowFromTop
+    context.saveGState()
+    context.setStrokeColor(red: 1, green: 1, blue: 1, alpha: 0.22)
+    context.setLineWidth(2)
+    context.setLineCap(.round)
+    context.move(to: CGPoint(x: 268, y: arrowY))
+    context.addLine(to: CGPoint(x: 392, y: arrowY))
+    context.move(to: CGPoint(x: 376, y: arrowY + 12))
+    context.addLine(to: CGPoint(x: 392, y: arrowY))
+    context.addLine(to: CGPoint(x: 376, y: arrowY - 12))
+    context.strokePath()
+    context.restoreGState()
+
+    return context.makeImage()
+}
+
+let dmgDir = root.appendingPathComponent("menubar/dmg")
+try FileManager.default.createDirectory(at: dmgDir, withIntermediateDirectories: true)
+for (scale, name) in [(CGFloat(1), "background.png"), (CGFloat(2), "background@2x.png")] {
+    guard let image = renderBackground(scale: scale) else { exit(1) }
+    try write(image, to: dmgDir.appendingPathComponent(name))
+    print("wrote menubar/dmg/\(name)")
+}
+
+// The menu bar mark.
+//
+// A *template* image: drawn in black with everything else transparent, and
+// flagged as such at load time, which is what lets macOS tint it — light on a
+// dark menu bar, dark on a light one, and inverted while the menu is open. A
+// coloured icon gets none of that and looks wrong in half the situations it
+// appears in.
+//
+// Rendered here rather than drawn in the app so there is still exactly one
+// transcription of the logo's path. The backdrop is deliberately absent: in the
+// menu bar the mark is the whole icon.
+
+/// 18pt tall inside the menu bar's 22pt, which is the conventional size — the
+/// glyph reads as part of the row rather than looming over it.
+let menuBarHeight: CGFloat = 18
+
+func renderMenuBarMark(scale: CGFloat) -> CGImage? {
+    let aspect = artboard.width / artboard.height
+    let width = Int((menuBarHeight * aspect * scale).rounded())
+    let height = Int((menuBarHeight * scale).rounded())
+
+    guard let context = CGContext(
+        data: nil, width: width, height: height,
+        bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        // With alpha, unlike the app icon: a template image is read through its
+        // alpha channel, and an opaque one would be a black rectangle.
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { return nil }
+
+    // A half-point of inset so antialiasing at the extremes is not clipped.
+    // The artboard's bounds already include the stroke, so the mark otherwise
+    // touches all four edges.
+    let inset = 0.5 * scale
+    let drawnHeight = CGFloat(height) - inset * 2
+    let markScale = drawnHeight / artboard.height
+
+    context.translateBy(x: (CGFloat(width) - artboard.width * markScale) / 2, y: inset)
+    context.scaleBy(x: markScale, y: markScale)
+    context.translateBy(x: 0, y: artboard.height)
+    context.scaleBy(x: 1, y: -1)
+
+    context.addPath(logoPath())
+    context.setStrokeColor(red: 0, green: 0, blue: 0, alpha: 1)
+    context.setLineWidth(strokeWidth)
+    context.setLineCap(.round)
+    context.setLineJoin(.round)
+    context.strokePath()
+
+    return context.makeImage()
+}
+
+let barIcons = root.appendingPathComponent("menubar/Resources")
+try FileManager.default.createDirectory(at: barIcons, withIntermediateDirectories: true)
+for (scale, name) in [(CGFloat(1), "menubar-icon.png"), (CGFloat(2), "menubar-icon@2x.png")] {
+    guard let image = renderMenuBarMark(scale: scale) else { exit(1) }
+    try write(image, to: barIcons.appendingPathComponent(name))
+    print("wrote menubar/Resources/\(name)")
+}

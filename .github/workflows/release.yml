@@ -69,8 +69,13 @@ jobs:
           # track the tag or no release is ever seen as newer than the last.
           APP_VERSION: ${{ github.ref_name }}
           # Fail the release rather than quietly shipping a build that will not
-          # launch on Intel at all.
+          # launch on Intel at all. It also now guards the app icon, which needs
+          # actool from full Xcode.
           REQUIRE_UNIVERSAL: "1"
+          # No window server here, so the AppleScript that arranges the disk
+          # image window can only fail slowly. The layout it would have produced
+          # is checked in at menubar/dmg/DS_Store and used directly.
+          DMG_SKIP_FINDER: "1"
         run: |
           cd menubar
           export APP_VERSION="${APP_VERSION#v}"
@@ -142,8 +147,14 @@ jobs:
               echo
               echo "This build is **not signed with a Developer ID**. macOS refuses the"
               echo "first launch with \"Air Mouse cannot be opened because the developer"
-              echo "cannot be verified\". To open it: right-click Air Mouse in Applications"
-              echo "and choose Open, then confirm. Double-clicking does not offer the option."
+              echo "cannot be verified\"."
+              echo
+              echo "To open it: try to open the app once and let macOS refuse, then go to"
+              echo "**System Settings -> Privacy & Security**, scroll to the bottom, and"
+              echo "click **Open Anyway**."
+              echo
+              echo "The old right-click-and-choose-Open trick no longer works on recent"
+              echo "versions of macOS."
             fi
           } > "$NOTES"
 
